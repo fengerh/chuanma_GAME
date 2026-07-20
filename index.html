@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>四川麻将 - 血战到底 v20260720.1610</title>
+<title>四川麻将 - 血战到底 v20260720.2210</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -939,10 +939,18 @@ class HuChecker {
     }
 
     static canFormMelds(counts) {
-        // 找第一张非零的牌
+        // 找最小的非零牌（按花色+数值升序，避免受手牌插入顺序影响导致漏判）
+        const suitOrder = { wan: 0, tiao: 1, tong: 2 };
         let firstKey = null;
         for (const key of Object.keys(counts)) {
-            if (counts[key] > 0) { firstKey = key; break; }
+            if (counts[key] <= 0) continue;
+            if (firstKey === null) { firstKey = key; continue; }
+            const [sa, va] = key.split('_');
+            const [sb, vb] = firstKey.split('_');
+            if (suitOrder[sa] < suitOrder[sb] ||
+                (suitOrder[sa] === suitOrder[sb] && parseInt(va) < parseInt(vb))) {
+                firstKey = key;
+            }
         }
         if (!firstKey) return true;
 
@@ -1024,11 +1032,16 @@ class HuChecker {
             if (meld.type === 'peng' || meld.type === 'gang' || meld.type === 'angang' || meld.type === 'bugang') continue;
             return false;
         }
-        // 手牌中剩余也全是刻子+将
+        // 手牌中剩余必须全是刻子 + 恰好一个将（不能含顺子）
+        // 等价条件：恰好一个值的数量 ≡ 2 (mod 3)，其余均 ≡ 0 (mod 3)
         const counts = {};
         for (const t of player.hand) counts[t.id] = (counts[t.id] || 0) + 1;
-        const vals = Object.values(counts);
-        return vals.every(v => v === 2 || v === 3);
+        let pairCount = 0;
+        for (const v of Object.values(counts)) {
+            if (v % 3 === 2) pairCount++;
+            else if (v % 3 !== 0) return false;
+        }
+        return pairCount === 1;
     }
 
     static isQingYiSe(player) {
@@ -1896,7 +1909,7 @@ class MahjongGame {
         this.players[fromId].discards.pop();
         player.melds.push({ type: 'gang', tiles: [tile, tile, tile, tile] });
 
-        // 刮风：每家付1番（2分）
+        // 明杠：每家付2分（番数只在胡牌时作为根计入）
         for (let i = 0; i < 4; i++) {
             if (i !== player.id && !this.players[i].isHu) {
                 this.players[i].score -= 2;
@@ -1910,7 +1923,7 @@ class MahjongGame {
         this.currentPlayer = player.id;
         this.render();
         this.speak('杠');
-        this.showToast(`${player.isHuman ? '你' : 'AI'} 明杠！刮风+2`);
+        this.showToast(`${player.isHuman ? '你' : 'AI'} 明杠！+2`);
 
         // 杠后摸牌
         this.schedule(() => this.gameLoop(), 800);
@@ -1921,12 +1934,12 @@ class MahjongGame {
         player.hand = player.hand.filter(t => !(t.suit === tile.suit && t.value === tile.value));
         player.melds.push({ type: 'angang', tiles: [tile, tile, tile, tile] });
 
-        // 下雨：每家付2番（4分）
+        // 暗杠：每家付2分（番数只在胡牌时作为根计入）
         for (let i = 0; i < 4; i++) {
             if (i !== player.id && !this.players[i].isHu) {
-                this.players[i].score -= 4;
-                player.score += 4;
-                player.gangScore += 4;
+                this.players[i].score -= 2;
+                player.score += 2;
+                player.gangScore += 2;
             }
         }
         player.gangCounts.an++;
@@ -1934,7 +1947,7 @@ class MahjongGame {
         player.sortHand();
         this.render();
         this.speak('杠');
-        this.showToast(`${player.isHuman ? '你' : 'AI'} 暗杠！下雨+4`);
+        this.showToast(`${player.isHuman ? '你' : 'AI'} 暗杠！+2`);
 
         // 杠后摸牌
         this.schedule(() => this.gameLoop(), 800);
@@ -1957,12 +1970,12 @@ class MahjongGame {
             meld.tiles.push(tile);
             player.removeTile(tile);
 
-            // 补杠：每家付1番
+            // 补杠（贴杠）：每家付1分（番数只在胡牌时作为根计入）
             for (let i = 0; i < 4; i++) {
                 if (i !== player.id && !this.players[i].isHu) {
-                    this.players[i].score -= 2;
-                    player.score += 2;
-                    player.gangScore += 2;
+                    this.players[i].score -= 1;
+                    player.score += 1;
+                    player.gangScore += 1;
                 }
             }
             player.gangCounts.bu++;
@@ -1970,7 +1983,7 @@ class MahjongGame {
             player.sortHand();
             this.render();
             this.speak('杠');
-            this.showToast(`${player.isHuman ? '你' : 'AI'} 补杠！+2`);
+            this.showToast(`${player.isHuman ? '你' : 'AI'} 补杠！+1`);
             this.schedule(() => this.gameLoop(), 800);
         }
     }
@@ -2036,19 +2049,22 @@ class MahjongGame {
             }
         }
 
-        // 查叫（未听牌的赔给听牌的）
+        // 查叫：先算每个未胡玩家听牌能胡的最大番数（0 表示未听牌）
         for (const p of this.players) {
             if (p.isHu) continue;
-            p.isTing = this.checkTing(p);
+            p.tingFan = this.tingMaxFan(p);
+            p.isTing = p.tingFan > 0;
         }
 
+        // 未听牌的赔给听牌的：按听牌者「能胡的牌的番数」赔付（不再固定4分）
+        const cap = this.maxFan || Infinity;
         for (const p of this.players) {
             if (p.isHu || p.isTing) continue;
-            // 未听牌赔给听牌的
             for (const t of this.players) {
                 if (t.isTing && !t.isHu) {
-                    p.score -= 4;
-                    t.score += 4;
+                    const pay = Math.min(t.tingFan, cap);
+                    p.score -= pay;
+                    t.score += pay;
                 }
             }
         }
@@ -2070,6 +2086,27 @@ class MahjongGame {
         return false;
     }
 
+    tingMaxFan(player) {
+        // 听牌者能胡的所有牌里，取最大番数；未听牌返回 0（不含自摸番）
+        if (player.hasQueSuit()) return 0;
+        let best = 0;
+        const savedHand = player.hand;
+        for (const suit of SUITS) {
+            if (suit === player.queSuit) continue;
+            for (let v = 1; v <= 9; v++) {
+                const testTile = new Tile(suit, v);
+                const fullHand = [...savedHand, testTile];
+                if (HuChecker.canHu(fullHand, player.melds)) {
+                    player.hand = fullHand;
+                    const info = HuChecker.calcFan(player, testTile, false, false);
+                    if (info.fan > best) best = info.fan;
+                }
+            }
+        }
+        player.hand = savedHand;
+        return best;
+    }
+
     endGame() {
         this.phase = 'end';
         this.showResultModal('');
@@ -2085,7 +2122,7 @@ class MahjongGame {
             } else if (p.hasQueSuit()) {
                 status = '🐷 花猪';
             } else if (p.isTing) {
-                status = '👂 听牌';
+                status = `👂 听牌 · 叫${p.tingFan || 1}番`;
             } else {
                 status = '❌ 未听';
             }
