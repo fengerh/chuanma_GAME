@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>四川麻将 - 血战到底 v20260720.2210</title>
+<title>四川麻将 - 血战到底 v20260721.1430</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -45,6 +45,9 @@ body {
     top: 50%;
     transform: translateY(-50%);
     height: 80%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
 }
 
 #player-top {
@@ -59,6 +62,9 @@ body {
     top: 50%;
     transform: translateY(-50%);
     height: 80%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
 }
 
 /* 玩家信息 */
@@ -73,9 +79,11 @@ body {
 }
 
 .player-info.active {
-    background: rgba(255, 200, 0, 0.8);
-    color: #000;
+    background: rgba(0,0,0,0.6);
+    color: #fff;
     font-weight: bold;
+    border: 2px solid #ffd700;
+    box-shadow: 0 0 8px rgba(255,215,0,0.6);
 }
 
 .player-info .que-suit {
@@ -227,6 +235,36 @@ body {
     flex-direction: column;
     align-items: center;
     gap: 8px;
+}
+
+/* 左右玩家：手牌与副露/弃牌并排，副露弃牌靠近中央 */
+.side-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    width: 100%;
+    justify-content: center;
+}
+
+
+.side-content {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 150px;
+    align-items: center;
+}
+
+/* 左右玩家副露区在 side-content 内横向排列并允许换行 */
+#player-left .side-content .meld-area,
+#player-right .side-content .meld-area {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 0;
 }
 
 .discard-area .tile {
@@ -422,6 +460,13 @@ body {
 .suit-choice.wan { color: #c41e3a; }
 .suit-choice.tiao { color: #228b22; }
 .suit-choice.tong { color: #1e90ff; }
+.suit-choice .suit-count {
+    display: block;
+    font-size: 13px;
+    font-weight: normal;
+    color: #888;
+    margin-top: 4px;
+}
 
 /* 信息提示 */
 #toast {
@@ -768,16 +813,24 @@ body {
     
     <div class="player-area" id="player-right">
         <div class="player-info" id="info-1">AI·东 <span class="que-suit"></span></div>
-        <div class="hand-tiles" id="hand-1"></div>
-        <div class="meld-area" id="meld-1"></div>
-        <div class="discard-area" id="discard-1"></div>
+        <div class="side-row">
+            <div class="side-content">
+                <div class="meld-area" id="meld-1"></div>
+                <div class="discard-area" id="discard-1"></div>
+            </div>
+            <div class="hand-tiles" id="hand-1"></div>
+        </div>
     </div>
-    
+
     <div class="player-area" id="player-left">
         <div class="player-info" id="info-3">AI·西 <span class="que-suit"></span></div>
-        <div class="hand-tiles" id="hand-3"></div>
-        <div class="meld-area" id="meld-3"></div>
-        <div class="discard-area" id="discard-3"></div>
+        <div class="side-row">
+            <div class="hand-tiles" id="hand-3"></div>
+            <div class="side-content">
+                <div class="meld-area" id="meld-3"></div>
+                <div class="discard-area" id="discard-3"></div>
+            </div>
+        </div>
     </div>
     
     <div class="player-area" id="player-bottom">
@@ -1306,6 +1359,7 @@ class MahjongGame {
     }
 
     restart() {
+        if (!confirm('确定开新局吗？当前牌局进度将丢失。')) return;
         this.init();
         this.start();
     }
@@ -1487,14 +1541,17 @@ class MahjongGame {
             this.players[i].queSuit = AIPlayer.chooseQue(this.players[i]);
         }
 
+        const counts = { wan: 0, tiao: 0, tong: 0 };
+        for (const t of this.players[0].hand) counts[t.suit]++;
+
         const html = `
             <div class="dingque-panel" id="dingque-modal">
                 <h2>🚫 定缺</h2>
                 <p>选择你要缺的花色（必须打完该花色才能胡牌）</p>
                 <div class="suit-choices">
-                    <div class="suit-choice wan" onclick="game.selectQue('wan')">万</div>
-                    <div class="suit-choice tiao" onclick="game.selectQue('tiao')">条</div>
-                    <div class="suit-choice tong" onclick="game.selectQue('tong')">筒</div>
+                    <div class="suit-choice wan" onclick="game.selectQue('wan')">万<span class="suit-count">${counts.wan}张</span></div>
+                    <div class="suit-choice tiao" onclick="game.selectQue('tiao')">条<span class="suit-count">${counts.tiao}张</span></div>
+                    <div class="suit-choice tong" onclick="game.selectQue('tong')">筒<span class="suit-count">${counts.tong}张</span></div>
                 </div>
             </div>
         `;
@@ -1502,6 +1559,14 @@ class MahjongGame {
     }
 
     selectQue(suit) {
+        const counts = { wan: 0, tiao: 0, tong: 0 };
+        for (const t of this.players[0].hand) counts[t.suit]++;
+        const maxCount = Math.max(counts.wan, counts.tiao, counts.tong);
+        const minCount = Math.min(counts.wan, counts.tiao, counts.tong);
+        // 选了数量最多的花色（且存在更少的选择）时提醒，避免定错缺
+        if (counts[suit] === maxCount && maxCount > minCount) {
+            if (!confirm(`你选的「${SUIT_NAMES[suit]}」是你手中数量最多的花色（${counts[suit]}张），定缺通常应选最少的花色，确定要定缺这门吗？`)) return;
+        }
         this.players[0].queSuit = suit;
         document.getElementById('modal-container').innerHTML = '';
         this.showToast(`定缺：${SUIT_NAMES[suit]}`);
@@ -1655,8 +1720,8 @@ class MahjongGame {
     }
 
     checkOtherActions(tile, fromId) {
-        // 按座位顺序（从出牌者下家开始）扫描，取最近的 胡/杠/碰 候选
-        let huPlayer = null;
+        // 按座位顺序（从出牌者下家开始）扫描，收集所有可 胡/杠/碰 的候选
+        const huPlayers = [];   // 一炮多响：收集全部可胡者，而非仅第一个
         let gangPlayer = null;
         let pengPlayer = null;
 
@@ -1666,10 +1731,10 @@ class MahjongGame {
             if (p.isHu) continue;
             if (p.hasQueSuit()) continue; // 还有缺门牌不能操作
 
-            // 检查胡
+            // 检查胡（收集全部，支持一炮多响/血战到底多人同胡）
             const testHand = [...p.hand, tile];
-            if (!huPlayer && HuChecker.canHu(testHand, p.melds)) {
-                huPlayer = p;
+            if (HuChecker.canHu(testHand, p.melds)) {
+                huPlayers.push(p);
             }
 
             // 检查杠（手牌有3张相同的）
@@ -1685,7 +1750,7 @@ class MahjongGame {
         }
 
         // 存入待处理候选，按优先级 胡 > 杠 > 碰 解析
-        this.pending = { tile, fromId, huPlayer, gangPlayer, pengPlayer };
+        this.pending = { tile, fromId, huPlayers, gangPlayer, pengPlayer, huOccurred: false };
         this.resolvePending();
     }
 
@@ -1695,20 +1760,30 @@ class MahjongGame {
         if (!pend) { this.nextTurn(); return; }
         const { tile, fromId } = pend;
 
-        if (pend.huPlayer) {
-            const p = pend.huPlayer;
-            pend.huPlayer = null;
+        // 胡：一炮多响，所有可胡者按座位顺序依次处理（血战到底多人可同胡）
+        if (pend.huPlayers && pend.huPlayers.length) {
+            const p = pend.huPlayers[0];
             if (p.isHuman) {
                 this.showPengGangHuOptions(p, tile, 'hu');
-            } else {
-                this.schedule(() => this.doHu(p, tile, false), 1200);
+                return;
             }
+            // AI 直接胡，移出队列后继续处理其余可胡者
+            pend.huPlayers.shift();
+            pend.huOccurred = true;
+            this.schedule(() => {
+                this.doHu(p, tile, false, false, false); // advanceTurn=false：由 resolvePending 统一推进
+                this.resolvePending();
+            }, 1200);
             return;
         }
 
         if (pend.gangPlayer) {
             const p = pend.gangPlayer;
             pend.gangPlayer = null;
+            if (p.isHu) {
+                this.resolvePending();
+                return;
+            }
             if (p.isHuman) {
                 this.showPengGangHuOptions(p, tile, 'gang');
             } else if (AIPlayer.shouldGang(p, tile)) {
@@ -1722,6 +1797,10 @@ class MahjongGame {
         if (pend.pengPlayer) {
             const p = pend.pengPlayer;
             pend.pengPlayer = null;
+            if (p.isHu) {
+                this.resolvePending();
+                return;
+            }
             if (p.isHuman) {
                 this.showPengGangHuOptions(p, tile, 'peng');
             } else if (AIPlayer.shouldPeng(p, tile)) {
@@ -1732,8 +1811,18 @@ class MahjongGame {
             return;
         }
 
+        // 所有动作结算完毕，统一推进回合（一炮多响需先结算全部胡再继续）
+        const hadHu = pend.huOccurred;
         this.pending = null;
-        this.nextTurn();
+        const active = this.players.filter(pl => !pl.isHu);
+        if (active.length <= 1 || this.huCount >= 3) {
+            this.schedule(() => this.endGame(), 2000);
+        } else if (hadHu) {
+            // 胡牌后停顿，给玩家看清结算
+            this.schedule(() => this.nextTurn(), 2000);
+        } else {
+            this.nextTurn();
+        }
     }
 
     showPengGangHuOptions(player, tile, type) {
@@ -1762,25 +1851,35 @@ class MahjongGame {
 
     doHuFromDiscard(pid) {
         document.getElementById('action-buttons').innerHTML = '';
-        this.doHu(this.players[pid], this.pendingTile, false);
+        const p = this.players[pid];
+        // 从待胡队列移除已处理的玩家，保留其余可胡者（一炮多响）
+        if (this.pending && this.pending.huPlayers) {
+            this.pending.huPlayers = this.pending.huPlayers.filter(x => x.id !== pid);
+            this.pending.huOccurred = true;
+        }
+        this.doHu(p, this.pendingTile, false, false, false); // advanceTurn=false：由 resolvePending 统一推进
+        // 继续处理其余可胡者 / 推进回合
+        this.resolvePending();
     }
 
     doMingGangFromUI(pid) {
         document.getElementById('action-buttons').innerHTML = '';
+        if (this.pending) this.pending.huPlayers = []; // 杠吃掉该牌，其余可胡者不再胡
         this.doMingGang(this.players[pid], this.pendingTile, this.lastDiscardFrom);
     }
 
     doPengFromUI(pid) {
         document.getElementById('action-buttons').innerHTML = '';
+        if (this.pending) this.pending.huPlayers = []; // 碰吃掉该牌，其余可胡者不再胡
         this.doPeng(this.players[pid], this.pendingTile, this.lastDiscardFrom);
     }
 
     passAction() {
         document.getElementById('action-buttons').innerHTML = '';
-        // 当前玩家放弃对该牌的所有权利，但保留其他玩家的碰/杠权利
+        // 当前玩家放弃对该牌的所有权利，但保留其他玩家的碰/杠/胡权利
         const p = this.pendingPlayer;
         if (this.pending && p) {
-            if (this.pending.huPlayer === p) this.pending.huPlayer = null;
+            if (this.pending.huPlayers) this.pending.huPlayers = this.pending.huPlayers.filter(x => x !== p);
             if (this.pending.gangPlayer === p) this.pending.gangPlayer = null;
             if (this.pending.pengPlayer === p) this.pending.pengPlayer = null;
         }
@@ -1788,7 +1887,7 @@ class MahjongGame {
     }
 
     // ==================== 操作执行 ====================
-    doHu(player, tile, isZiMo, isQiangGang = false) {
+    doHu(player, tile, isZiMo, isQiangGang = false, advanceTurn = true) {
         if (isQiangGang) {
             // 抢杠胡：牌来自补杠者手牌，加入胡牌者手牌用于算番（不从弃牌区弹）
             player.addTile(tile);
@@ -1827,17 +1926,20 @@ class MahjongGame {
         this.render();
         this.speak('胡');
 
-        // 检查是否结束
-        const activePlayers = this.players.filter(p => !p.isHu);
-        if (activePlayers.length <= 1 || this.huCount >= 3) {
-            this.schedule(() => this.endGame(), 2000);
-        } else {
-            // 血战到底继续：从胡牌者的下家开始
-            this.currentPlayer = player.id;
-            this.schedule(() => {
-                this.nextPlayer();
-                this.gameLoop();
-            }, 2000);
+        // 检查是否结束 / 推进回合
+        // advanceTurn=false 时（一炮多响）不自推，交由 resolvePending 在全部胡结算完后统一推进
+        if (advanceTurn) {
+            const activePlayers = this.players.filter(p => !p.isHu);
+            if (activePlayers.length <= 1 || this.huCount >= 3) {
+                this.schedule(() => this.endGame(), 2000);
+            } else {
+                // 血战到底继续：从胡牌者的下家开始
+                this.currentPlayer = player.id;
+                this.schedule(() => {
+                    this.nextPlayer();
+                    this.gameLoop();
+                }, 2000);
+            }
         }
     }
 
@@ -1909,13 +2011,12 @@ class MahjongGame {
         this.players[fromId].discards.pop();
         player.melds.push({ type: 'gang', tiles: [tile, tile, tile, tile] });
 
-        // 明杠：每家付2分（番数只在胡牌时作为根计入）
-        for (let i = 0; i < 4; i++) {
-            if (i !== player.id && !this.players[i].isHu) {
-                this.players[i].score -= 2;
-                player.score += 2;
-                player.gangScore += 2;
-            }
+        // 点杠（明杠，别人打出第四张）：只由放炮者付2分（番数只在胡牌时作为根计入）
+        const loser = this.players[fromId];
+        if (loser && !loser.isHu) {
+            loser.score -= 2;
+            player.score += 2;
+            player.gangScore += 2;
         }
         player.gangCounts.ming++;
 
@@ -1923,7 +2024,7 @@ class MahjongGame {
         this.currentPlayer = player.id;
         this.render();
         this.speak('杠');
-        this.showToast(`${player.isHuman ? '你' : 'AI'} 明杠！+2`);
+        this.showToast(`${player.isHuman ? '你' : 'AI'} 点杠！+2`);
 
         // 杠后摸牌
         this.schedule(() => this.gameLoop(), 800);
