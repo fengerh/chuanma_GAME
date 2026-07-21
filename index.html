@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>四川麻将 - 血战到底 v20260721.1430</title>
+<title>四川麻将 - 血战到底 v20260721.1720</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -34,14 +34,14 @@ body {
 }
 
 #player-bottom {
-    bottom: 10px;
+    bottom: 15%;
     left: 50%;
     transform: translateX(-50%);
     width: 90%;
 }
 
 #player-right {
-    right: 10px;
+    right: 14%;
     top: 50%;
     transform: translateY(-50%);
     height: 80%;
@@ -51,14 +51,14 @@ body {
 }
 
 #player-top {
-    top: 10px;
+    top: 15%;
     left: 50%;
     transform: translateX(-50%);
     width: 90%;
 }
 
 #player-left {
-    left: 10px;
+    left: 14%;
     top: 50%;
     transform: translateY(-50%);
     height: 80%;
@@ -119,6 +119,8 @@ body {
 .tile {
     width: 42px;
     height: 58px;
+    box-sizing: border-box;
+    padding: 0;
     background: linear-gradient(180deg, #fff 0%, #f0f0f0 50%, #ddd 100%);
     border: 1px solid #999;
     border-radius: 5px;
@@ -131,6 +133,13 @@ body {
     transition: transform 0.1s, box-shadow 0.1s;
     position: relative;
     font-weight: bold;
+}
+
+/* 内联 SVG 牌面：充满牌体并随尺寸自适应缩放 */
+.tile svg {
+    width: 100%;
+    height: 100%;
+    display: block;
 }
 
 .tile:hover {
@@ -397,9 +406,9 @@ body {
 /* 定缺悬浮面板（不遮挡棋盘手牌） */
 .dingque-panel {
     position: fixed;
-    bottom: 95px;
+    top: 50%;
     left: 50%;
-    transform: translateX(-50%);
+    transform: translate(-50%, -50%);
     background: rgba(20, 35, 25, 0.92);
     border: 2px solid #ffe27a;
     border-radius: 14px;
@@ -798,6 +807,37 @@ body {
     /* 操作按钮在矮屏下略缩但仍 ≥44px 触控友好 */
     .action-btn { padding: 10px 18px; font-size: 15px; }
 }
+
+/* 牌样预览画廊（双击左上角总分弹出，便于调整牌面样式） */
+#score-display { cursor: pointer; user-select: none; }
+#tile-gallery-modal .gallery {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin: 12px 0;
+    max-height: 70vh;
+    overflow-y: auto;
+}
+.gallery-section h3 {
+    font-size: 15px;
+    color: #333;
+    margin: 0 0 8px;
+    text-align: left;
+    border-left: 4px solid #1a5c2a;
+    padding-left: 8px;
+}
+.gallery-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+}
+.gallery-row .tile {
+    width: 52px;
+    height: 72px;
+    cursor: default;
+}
+.gallery-row .tile:hover { transform: none; }
 </style>
 </head>
 <body>
@@ -858,7 +898,7 @@ body {
         <button id="settings-btn" onclick="game.showFanSettings()">⚙️ 番数设置</button>
         <button id="new-game-btn" onclick="game.restart()">🔄 新游戏</button>
     </div>
-    <div id="score-display">总分: <span id="total-score">0</span></div>
+    <div id="score-display" title="双击查看所有麻将牌样式" ondblclick="game.showTileGallery()">总分: <span id="total-score">0</span></div>
 </div>
 
 <!-- 提示 -->
@@ -1247,6 +1287,116 @@ class AIPlayer {
         if (neighbors > 0) return Math.random() > 0.5;
         return true;
     }
+}
+
+// ==================== 内联 SVG 牌面（现实样式：万/条/筒图案） ====================
+const NUM_CN = ['', '一','二','三','四','五','六','七','八','九'];
+
+// 筒子：每个铜钱的中心坐标（viewBox 100x140）
+const TONG_LAYOUT = {
+    1: [[50,70]],
+    2: [[50,44],[50,96]],
+    3: [[30,46],[50,70],[70,94]],          // 斜线对角（三铜钱连成一条斜线）
+    4: [[34,52],[66,52],[34,88],[66,88]],
+    5: [[34,42],[66,42],[50,70],[34,98],[66,98]],
+    6: [[34,38],[66,38],[34,88],[66,88],[34,116],[66,116]], // 上二下四（2x2），中间留空便于分辨
+    7: [[30,50],[50,40],[70,30],[34,88],[66,88],[34,116],[66,116]], // 上三斜排 + 下四（2x2）
+    8: [[34,32],[34,57],[34,82],[34,107],[66,32],[66,57],[66,82],[66,107]], // 两竖列，各四个圆圈
+    9: [[28,38],[50,38],[72,38],[28,70],[50,70],[72,70],[28,102],[50,102],[72,102]]
+};
+// 条子：每根竹节的中心坐标
+const TIAO_LAYOUT = {
+    2: [[50,46],[50,94]],                                       // 竖向两个
+    3: [[50,40],[33,96],[67,96]],                               // 三角形三个（上一下二）
+    4: [[34,50],[66,50],[34,90],[66,90]],
+    5: [[34,42],[66,42],[50,70],[34,98],[66,98]],
+    6: [[32,46],[50,46],[68,46],[32,94],[50,94],[68,94]],
+    7: [[50,28],[28,66],[50,66],[72,66],[28,104],[50,104],[72,104]], // 上1 + 下两排各3（共6）
+    8: [[18,45],[40,45],[62,45],[84,45],[18,95],[40,95],[62,95],[84,95]], // 整齐 2×4 网格
+    9: [[30,38],[50,38],[70,38],[30,70],[50,70],[70,70],[30,102],[50,102],[70,102]]
+};
+const TIAO_DIM = {
+    2:{w:7,h:44}, 3:{w:7,h:46}, 4:{w:6,h:34}, 5:{w:6,h:34},
+    6:{w:6,h:36}, 7:{w:6,h:30}, 8:{w:6,h:30}, 9:{w:6,h:26}
+};
+
+// 筒子：双环铜钱 + 白色菱形方孔（isRed 时铜钱变红，用于特定点）
+function coin(cx, cy, r, isRed = false) {
+    const col = isRed ? '#c0392b' : '#1769aa';
+    const sw = Math.max(1.5, r * 0.18);   // 环的线宽
+    const r2 = r * 0.55;                  // 内环半径
+    const sq = r * 0.32;                  // 菱形方孔半边长
+    const pts = `${cx},${cy-sq} ${cx+sq},${cy} ${cx},${cy+sq} ${cx-sq},${cy}`;
+    return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${col}" stroke-width="${sw.toFixed(1)}"/>`
+         + `<circle cx="${cx}" cy="${cy}" r="${r2.toFixed(1)}" fill="none" stroke="${col}" stroke-width="${sw.toFixed(1)}"/>`
+         + `<polygon points="${pts}" fill="#ffffff" stroke="${col}" stroke-width="${sw.toFixed(1)}"/>`;
+}
+// 条子：细竹竿 + 竹节（五条中心那根为红色；angle 可让竹节斜向，用于八条的 W/M）
+function bamboo(cx, cy, w, h, isRed = false, angle = 0) {
+    const c  = isRed ? '#c0392b' : '#2e8b57';
+    const dc = isRed ? '#8e2418' : '#1f6b42';
+    let inner = `<rect x="${(cx-w/2).toFixed(1)}" y="${(cy-h/2).toFixed(1)}" width="${w}" height="${h}" rx="${(w/2).toFixed(1)}" fill="${c}"/>`;
+    const n = h > 32 ? 3 : (h > 22 ? 2 : 1);
+    for (let i = 1; i < n; i++) {
+        const yy = (cy - h/2 + h*i/n).toFixed(1);
+        inner += `<line x1="${(cx-w/2-1).toFixed(1)}" y1="${yy}" x2="${(cx+w/2+1).toFixed(1)}" y2="${yy}" stroke="${dc}" stroke-width="2.5" stroke-linecap="round"/>`;
+    }
+    return angle ? `<g transform="rotate(${angle} ${cx} ${cy})">${inner}</g>` : inner;
+}
+function wanSVG(v) {
+    const c = '#c0392b';   // 「萬」字保持红色
+    const num = '#1a1a1a'; // 数字（一~九）改为黑色
+    const f = "'KaiTi','STKaiti','SimSun','Microsoft YaHei',serif";
+    return `<text x="50" y="60" text-anchor="middle" font-size="48" font-family="${f}" font-weight="bold" fill="${num}">${NUM_CN[v]}</text>`
+         + `<text x="50" y="116" text-anchor="middle" font-size="48" font-family="${f}" font-weight="bold" fill="${c}">萬</text>`;
+}
+function tongSVG(v) {
+    const r = v === 1 ? 30 : 13;
+    // 红色点规则：三筒中间、五筒中间、七筒下面四个、九筒横排中间一行
+    const RED = {
+        3: [1],                       // 中间点
+        5: [2],                       // 中间点
+        6: [2,3,4,5],                 // 下面四个
+        7: [3,4,5,6],                 // 下面四个
+        9: [3,4,5]                    // 横排中间一行
+    };
+    const reds = RED[v] || [];
+    return TONG_LAYOUT[v].map(([x,y], i) => coin(x,y,r, reds.includes(i))).join('');
+}
+function tiaoBird() {
+    return `<g fill="#2e8b57">`
+         + `<ellipse cx="46" cy="84" rx="15" ry="34"/>`
+         + `<circle cx="46" cy="44" r="13"/>`
+         + `<path d="M58 40 L75 46 L58 52 Z"/>`
+         + `</g>`
+         + `<path d="M40 58 C 18 66, 16 102, 36 114 C 28 98, 30 76, 45 64 Z" fill="#c0392b"/>` // 红色翅膀
+         + `<circle cx="42" cy="42" r="3.2" fill="#fff"/>`
+         + `<circle cx="42" cy="42" r="1.6" fill="#143d26"/>`
+         + `<path d="M40 114 L46 102 L52 114" stroke="#2e8b57" stroke-width="4" fill="none" stroke-linecap="round"/>`
+         + `<path d="M30 80 q-9 6 0 16" stroke="#2e8b57" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+}
+function tiaoSVG(v) {
+    if (v === 1) return tiaoBird();
+    const d = TIAO_DIM[v];
+    // 每条竹节的斜向角度（度，顺时针为正）；缺省为 0（竖直）
+    const ANGLE = {
+        8: [0, 45, -45, 0, 0, -45, 45, 0] // 八条：上[0,40,-40,0] 下[0,-40,40,0]
+    };
+    const angles = ANGLE[v] || [];
+    return TIAO_LAYOUT[v].map(([x,y], i) => {
+        // 红色规则：五条中心、七条竖向中间三个（中心列）、九条竖向中间三个（中心列）
+        const isRed = (v === 5 && i === 2)
+                    || (v === 7 && (i === 0 || i === 2 || i === 5))
+                    || (v === 9 && (i === 1 || i === 4 || i === 7));
+        return bamboo(x, y, d.w, d.h, isRed, angles[i] || 0);
+    }).join('');
+}
+function tileSVG(tile) {
+    let inner;
+    if (tile.suit === 'wan') inner = wanSVG(tile.value);
+    else if (tile.suit === 'tong') inner = tongSVG(tile.value);
+    else inner = tiaoSVG(tile.value);
+    return `<svg viewBox="0 0 100 140" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">${inner}</svg>`;
 }
 
 // ==================== 游戏主控制器 ====================
@@ -2556,7 +2706,7 @@ class MahjongGame {
     createTileElement(tile, idx) {
         const el = document.createElement('div');
         el.className = `tile ${tile.suit}`;
-        el.innerHTML = `<span class="tile-value">${tile.value}</span><span class="tile-suit">${SUIT_NAMES[tile.suit]}</span>`;
+        el.innerHTML = tileSVG(tile);
         return el;
     }
 
@@ -2568,6 +2718,32 @@ class MahjongGame {
         toast.offsetHeight; // reflow
         toast.style.animation = 'fadeInOut 2s ease-in-out';
         setTimeout(() => { toast.style.display = 'none'; }, 2000);
+    }
+
+    // 牌样预览：双击左上角总分弹出，展示万/条/筒 1~9 全部牌面，便于调整样式
+    showTileGallery() {
+        const suits = ['wan', 'tiao', 'tong'];
+        const suitNames = { wan: '万', tiao: '条', tong: '筒' };
+        let sections = '';
+        for (const suit of suits) {
+            let tiles = '';
+            for (let v = 1; v <= 9; v++) {
+                tiles += `<div class="tile ${suit}" title="${v}${suitNames[suit]}">${tileSVG(new Tile(suit, v))}</div>`;
+            }
+            sections += `<div class="gallery-section"><h3>${suitNames[suit]}子（1~9）</h3><div class="gallery-row">${tiles}</div></div>`;
+        }
+        const html = `
+            <div class="modal-overlay" id="tile-gallery-modal" onclick="if(event.target===this)document.getElementById('modal-container').innerHTML='';">
+                <div class="modal" style="max-width:760px;">
+                    <h2>🀄 麻将牌样式预览</h2>
+                    <p style="font-size:13px;color:#999;">双击左上角总分可再次打开 · 点击空白处关闭</p>
+                    <div class="gallery">${sections}</div>
+                    <div class="lb-actions">
+                        <button class="modal-btn" onclick="document.getElementById('modal-container').innerHTML='';">关闭</button>
+                    </div>
+                </div>
+            </div>`;
+        document.getElementById('modal-container').innerHTML = html;
     }
 }
 
