@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>四川麻将 - 血战到底 v20260721.1720</title>
+<title>四川麻将 - 血战到底 v20260721.2000</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -46,7 +46,7 @@ body {
     transform: translateY(-50%);
     height: 80%;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;   /* 标签移到内侧（朝中心） */
     align-items: center;
 }
 
@@ -63,9 +63,17 @@ body {
     transform: translateY(-50%);
     height: 80%;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;   /* 标签移到内侧（朝中心） */
     align-items: center;
 }
+
+/* 四个标签页统一朝中心摆放，像“你”的标签页一样贴近中央：
+   你(下)标签在上、北(上)标签在下、东(右)标签在左、西(左)标签在右 */
+#player-right .player-info { order: -1; margin: 0 8px 0 0; }
+#player-right .side-row { width: auto; }
+#player-left .player-info { order: 1; margin: 0 0 0 8px; }
+#player-left .side-row { width: auto; }
+#player-top .player-info { order: 1; margin: 6px 0 0 0; }
 
 /* 玩家信息 */
 .player-info {
@@ -1297,7 +1305,7 @@ const TONG_LAYOUT = {
     1: [[50,70]],
     2: [[50,44],[50,96]],
     3: [[30,46],[50,70],[70,94]],          // 斜线对角（三铜钱连成一条斜线）
-    4: [[34,52],[66,52],[34,88],[66,88]],
+    4: [[34,42],[66,42],[34,98],[66,98]],
     5: [[34,42],[66,42],[50,70],[34,98],[66,98]],
     6: [[34,38],[66,38],[34,88],[66,88],[34,116],[66,116]], // 上二下四（2x2），中间留空便于分辨
     7: [[30,50],[50,40],[70,30],[34,88],[66,88],[34,116],[66,116]], // 上三斜排 + 下四（2x2）
@@ -1308,11 +1316,11 @@ const TONG_LAYOUT = {
 const TIAO_LAYOUT = {
     2: [[50,46],[50,94]],                                       // 竖向两个
     3: [[50,40],[33,96],[67,96]],                               // 三角形三个（上一下二）
-    4: [[34,50],[66,50],[34,90],[66,90]],
+    4: [[34,42],[66,42],[34,98],[66,98]],
     5: [[34,42],[66,42],[50,70],[34,98],[66,98]],
     6: [[32,46],[50,46],[68,46],[32,94],[50,94],[68,94]],
     7: [[50,28],[28,66],[50,66],[72,66],[28,104],[50,104],[72,104]], // 上1 + 下两排各3（共6）
-    8: [[18,45],[40,45],[62,45],[84,45],[18,95],[40,95],[62,95],[84,95]], // 整齐 2×4 网格
+    8: [[24,45],[38,45],[62,45],[76,45],[24,95],[38,95],[62,95],[76,95]], // 整齐 2×4 网格
     9: [[30,38],[50,38],[70,38],[30,70],[50,70],[70,70],[30,102],[50,102],[70,102]]
 };
 const TIAO_DIM = {
@@ -1417,6 +1425,7 @@ class MahjongGame {
         this.dealerId = 0; // 本局庄家（开局玩家）
         this.timers = [];
         this.pending = null;
+        this.selectedIndex = -1; // 当前已抬起（待二次确认）的手牌下标，-1 表示无
         this.soundEnabled = true; // 语音播报默认开启
         this.init();
     }
@@ -1729,6 +1738,8 @@ class MahjongGame {
     // ==================== 游戏主循环 ====================
     gameLoop() {
         if (this.phase !== 'play') return;
+        this.selectedIndex = -1; // 新回合清掉上一轮残留的抬起状态
+
 
         const player = this.players[this.currentPlayer];
 
@@ -1818,6 +1829,7 @@ class MahjongGame {
     }
 
     humanHu() {
+        this.selectedIndex = -1; // 选了胡，清掉抬起的牌
         document.getElementById('action-buttons').innerHTML = '';
         document.getElementById('hint-text').textContent = '';
         this.enableDiscard = false;
@@ -1825,12 +1837,14 @@ class MahjongGame {
     }
 
     humanAnGang() {
+        this.selectedIndex = -1; // 选了杠，清掉抬起的牌
         document.getElementById('action-buttons').innerHTML = '';
         const tile = this.checkAnGang(this.players[0]);
         this.doAnGang(this.players[0], tile);
     }
 
     humanBuGang() {
+        this.selectedIndex = -1; // 选了补杠，清掉抬起的牌
         document.getElementById('action-buttons').innerHTML = '';
         const tile = this.checkBuGang(this.players[0]);
         this.doBuGang(this.players[0], tile);
@@ -1842,12 +1856,23 @@ class MahjongGame {
         document.getElementById('hint-text').textContent = '请点击手牌出牌';
     }
 
-    // 出牌（点击手牌）
+    // 出牌（点击手牌）：两步确认
+    // 第一次点击 -> 仅抬高（选中）；第二次点击同一张 -> 出牌
     onTileClick(idx) {
         if (this.phase !== 'play') return;
         if (this.currentPlayer !== 0) return;
         if (!this.enableDiscard) return;
 
+        // 不是当前已抬高的牌 -> 抬高它（切换选择），不立即出牌
+        if (this.selectedIndex !== idx) {
+            this.selectedIndex = idx;
+            this.render(); // 重新渲染以显示抬高的牌
+            document.getElementById('hint-text').textContent = '再次点击该牌确认出牌';
+            return;
+        }
+
+        // 第二次点击同一张牌 -> 确认出牌
+        this.selectedIndex = -1;
         const player = this.players[0];
         this.enableDiscard = false;
         this.drawnTile = null;
@@ -2622,6 +2647,7 @@ class MahjongGame {
                 player.hand.forEach((tile, idx) => {
                     const el = this.createTileElement(tile, idx);
                     el.onclick = () => this.onTileClick(idx);
+                    if (idx === this.selectedIndex) el.classList.add('selected'); // 保持已抬高的牌
                     // 缺门提示
                     if (queSuit && tile.suit === queSuit) {
                         el.classList.add('que-tile');
