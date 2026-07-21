@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>四川麻将 - 血战到底 v20260721.2000</title>
+<title>四川麻将 - 血战到底 v20260721.2310</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -731,25 +731,37 @@ body {
 }
 .settings-presets button {
     padding: 6px 14px;
-    background: rgba(255,255,255,0.12);
-    color: #fff;
-    border: 1px solid rgba(255,255,255,0.3);
+    background: #f0f0f0;
+    color: #333;
+    border: 1px solid #ccc;
     border-radius: 6px;
     cursor: pointer;
     font-size: 13px;
 }
-.settings-presets button:hover { background: rgba(255,255,255,0.25); }
+.settings-presets button:hover { background: #e2e2e2; }
 .settings-presets button.active { background: #ffd700; color: #1a5c2a; border-color: #ffd700; }
 .settings-input {
     width: 100%;
     padding: 8px;
     margin: 6px 0 12px;
-    background: rgba(0,0,0,0.3);
-    color: #fff;
-    border: 1px solid rgba(255,255,255,0.3);
+    background: #fff;
+    color: #333;
+    border: 1px solid #ccc;
     border-radius: 6px;
     font-size: 14px;
     box-sizing: border-box;
+}
+
+/* 设置中心分区 */
+.settings-section {
+    padding: 12px 0;
+    border-top: 1px solid rgba(0,0,0,0.1);
+}
+.settings-section:first-of-type { border-top: none; padding-top: 4px; }
+.settings-section h3 {
+    font-size: 15px;
+    color: #1a5c2a;
+    margin-bottom: 6px;
 }
 
 
@@ -903,7 +915,7 @@ body {
     <div id="top-actions">
         <button id="leaderboard-btn" onclick="game.showLeaderboard()">📈 积分榜</button>
         <button id="sound-toggle" onclick="game.toggleSound()">🔊 语音</button>
-        <button id="settings-btn" onclick="game.showFanSettings()">⚙️ 番数设置</button>
+        <button id="settings-btn" onclick="game.showSettings()">⚙️ 设置</button>
         <button id="new-game-btn" onclick="game.restart()">🔄 新游戏</button>
     </div>
     <div id="score-display" title="双击查看所有麻将牌样式" ondblclick="game.showTileGallery()">总分: <span id="total-score">0</span></div>
@@ -1096,10 +1108,17 @@ class HuChecker {
         const isDuiDui = !isQiDui && this.isDuiDuiHu(player);
         const isJinGou = (player.hand.length === 2 && player.melds.length === 4);
 
-        // 根（带根）：副露里的杠 + 手里 4 张相同的暗刻，每个根 ×2
-        const meldGang = player.melds.filter(m => ['gang', 'angang', 'bugang'].includes(m.type)).length;
-        const hiddenKan = Object.values(counts).filter(v => v === 4).length;
-        const rootCount = meldGang + hiddenKan;
+        // 根（带根）：玩家拥有的每一种牌，只要总数达到 4 张就计 1 个根
+        // 涵盖：手里 4 张（暗四张）/ 碰 3 张 + 手里 1 张 / 任意形式的杠
+        const totalCounts = {};
+        for (const t of player.hand) totalCounts[t.id] = (totalCounts[t.id] || 0) + 1;
+        for (const m of player.melds) {
+            if (!m.tiles || !m.tiles.length) continue;
+            const n = m.type === 'peng' ? 3 : 4; // 碰 3 张；杠类（明杠/暗杠/补杠）4 张
+            const key = m.tiles[0].id;
+            totalCounts[key] = (totalCounts[key] || 0) + n;
+        }
+        const rootCount = Object.values(totalCounts).filter(v => v >= 4).length;
 
         if (isQiDui) {
             fan *= 4; fanList.push('七对');
@@ -1153,16 +1172,134 @@ class HuChecker {
     }
 }
 
+// ==================== 向听数引擎（困难/大师档核心） ====================
+class Shanten {
+    // 标准型向听数（counts：手牌计数，meldsCount：已完成的副露面子数）
+    static standard(counts, meldsCount) {
+        let best = 8;
+        const ids = Object.keys(counts).filter(k => counts[k] > 0);
+        const pairCands = ids.filter(k => counts[k] >= 2);
+        for (const pair of [...pairCands, null]) {
+            const c = { ...counts };
+            let hasPair = 0;
+            if (pair) { c[pair] -= 2; hasPair = 1; }
+            const { sets, partials } = this.decompose(c);
+            let s = sets + meldsCount;
+            let p = partials;
+            const blocks = s + p + hasPair;
+            if (blocks > 5) p -= (blocks - 5);
+            const sh = (4 - s) * 2 - p - hasPair;
+            if (sh < best) best = sh;
+        }
+        return best;
+    }
+
+    // 七对向听数（仅在无副露时有意义）
+    static qiDui(counts) {
+        let pairs = 0, kinds = 0;
+        for (const v of Object.values(counts)) {
+            if (v > 0) { kinds++; if (v >= 2) pairs++; }
+        }
+        return 6 - pairs + Math.max(0, 7 - kinds);
+    }
+
+    // 综合：取标准型与七对的最小值
+    static of(player) {
+        const counts = {};
+        for (const t of player.hand) counts[t.id] = (counts[t.id] || 0) + 1;
+        const mc = player.melds.length;
+        let sh = this.standard(counts, mc);
+        if (mc === 0) sh = Math.min(sh, this.qiDui(counts));
+        return sh;
+    }
+
+    // 递归分解手牌，最大化（2×完整面子 + 搭子），返回 {sets, partials}
+    static decompose(counts) {
+        const order = { wan: 0, tiao: 1, tong: 2 };
+        let firstKey = null;
+        for (const key of Object.keys(counts)) {
+            if (counts[key] <= 0) continue;
+            if (firstKey === null) { firstKey = key; continue; }
+            const [sa, va] = key.split('_');
+            const [sb, vb] = firstKey.split('_');
+            if (order[sa] < order[sb] ||
+                (order[sa] === order[sb] && parseInt(va) < parseInt(vb))) {
+                firstKey = key;
+            }
+        }
+        if (!firstKey) return { sets: 0, partials: 0 };
+
+        const [suit, valStr] = firstKey.split('_');
+        const val = parseInt(valStr);
+        let best = { sets: 0, partials: 0, score: 0 };
+        const consider = (sets, partials) => {
+            const sc = 2 * sets + partials;
+            if (sc > best.score || (sc === best.score && sets > best.sets)) {
+                best = { sets, partials, score: sc };
+            }
+        };
+
+        // 刻子
+        if (counts[firstKey] >= 3) {
+            counts[firstKey] -= 3;
+            const r = this.decompose(counts); consider(r.sets + 1, r.partials);
+            counts[firstKey] += 3;
+        }
+        // 顺子
+        const k2 = `${suit}_${val + 1}`, k3 = `${suit}_${val + 2}`;
+        if ((counts[k2] || 0) > 0 && (counts[k3] || 0) > 0) {
+            counts[firstKey]--; counts[k2]--; counts[k3]--;
+            const r = this.decompose(counts); consider(r.sets + 1, r.partials);
+            counts[firstKey]++; counts[k2]++; counts[k3]++;
+        }
+        // 对子（搭子）
+        if (counts[firstKey] >= 2) {
+            counts[firstKey] -= 2;
+            const r = this.decompose(counts); consider(r.sets, r.partials + 1);
+            counts[firstKey] += 2;
+        }
+        // 两面/边张搭子
+        if ((counts[k2] || 0) > 0) {
+            counts[firstKey]--; counts[k2]--;
+            const r = this.decompose(counts); consider(r.sets, r.partials + 1);
+            counts[firstKey]++; counts[k2]++;
+        }
+        // 嵌张搭子
+        const k22 = `${suit}_${val + 2}`;
+        if ((counts[k22] || 0) > 0) {
+            counts[firstKey]--; counts[k22]--;
+            const r = this.decompose(counts); consider(r.sets, r.partials + 1);
+            counts[firstKey]++; counts[k22]++;
+        }
+        // 该牌作为孤张弃置
+        counts[firstKey]--;
+        const r2 = this.decompose(counts); consider(r2.sets, r2.partials);
+        counts[firstKey]++;
+
+        return { sets: best.sets, partials: best.partials };
+    }
+}
+
+// ==================== AI 难度档位（集中管理 4 档的「旋钮」） ====================
+const AI_LEVELS = {
+    easy:   { label: '新手', mistake: 0.35, peng: 0.85, gang: 0.30, useShanten: false, defensive: false, badExchange: 0.40 },
+    normal: { label: '普通', mistake: 0.10, peng: 0.80, gang: 0.60, useShanten: false, defensive: false, badExchange: 0.0 },
+    hard:   { label: '困难', mistake: 0.02, peng: 0.95, gang: 0.80, useShanten: true,  defensive: false, badExchange: 0.0 },
+    master: { label: '大师', mistake: 0.00, peng: 1.00, gang: 0.90, useShanten: true,  defensive: true,  badExchange: 0.0 },
+};
+
 // ==================== AI策略 ====================
 class AIPlayer {
     // 选择换三张
-    static chooseExchange(player) {
+    static chooseExchange(player, opts) {
         let bestSuit = null;
         let bestScore = -Infinity;
+        const candidates = [];
 
         for (const suit of SUITS) {
             const suitTiles = player.hand.filter(t => t.suit === suit);
             if (suitTiles.length < 3) continue;
+            candidates.push(suit);
             const score = this.evalExchangeSuit(player.hand, suit);
             if (score > bestScore) {
                 bestScore = score;
@@ -1179,11 +1316,25 @@ class AIPlayer {
             }
         }
 
+        // 新手偶尔换错花色（选张数最多的而非最差的）
+        if (opts && opts.badExchange && Math.random() < opts.badExchange && candidates.length > 1) {
+            bestSuit = candidates.reduce((a, b) =>
+                player.hand.filter(t => t.suit === a).length >= player.hand.filter(t => t.suit === b).length ? a : b);
+        }
+
         const suitTiles = player.hand.filter(t => t.suit === bestSuit);
-        // 选最差的3张
-        const scored = suitTiles.map(t => ({ tile: t, score: this.tileValue(t, suitTiles) }));
-        scored.sort((a, b) => a.score - b.score);
-        return scored.slice(0, 3).map(s => s.tile);
+        let picked = suitTiles.map(t => ({ tile: t, score: this.tileValue(t, suitTiles) }))
+            .sort((a, b) => a.score - b.score).slice(0, 3).map(s => s.tile);
+
+        // 新手偶尔换错牌（随机 3 张而非最差的）
+        if (opts && opts.badExchange && Math.random() < opts.badExchange) {
+            const pool = [...suitTiles];
+            picked = [];
+            while (picked.length < 3 && pool.length) {
+                picked.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+            }
+        }
+        return picked;
     }
 
     static evalExchangeSuit(hand, suit) {
@@ -1231,27 +1382,61 @@ class AIPlayer {
     }
 
     // 选择出牌
-    static chooseDiscard(player) {
-        // 优先打缺门牌
+    static chooseDiscard(player, opts, game) {
+        // 优先打缺门牌（所有档一致）
         const queTiles = player.hand.filter(t => t.suit === player.queSuit);
         if (queTiles.length > 0) {
-            // 打最没用的缺门牌
             const scored = queTiles.map(t => ({ tile: t, score: this.tileValue(t, queTiles) }));
             scored.sort((a, b) => a.score - b.score);
             return player.hand.indexOf(scored[0].tile);
         }
 
-        // 正常出牌：打价值最低的
-        let bestIdx = 0;
-        let bestScore = Infinity;
-        for (let i = 0; i < player.hand.length; i++) {
-            const score = this.evalDiscard(player, i);
-            if (score < bestScore) {
-                bestScore = score;
-                bestIdx = i;
+        const useSh = opts && opts.useShanten;
+        let bestIdx;
+        if (useSh) {
+            // 困难/大师：枚举弃牌算向听数，取最小；同向听时保留更有用的牌
+            let bestSh = 99;
+            let candidates = [];
+            for (let i = 0; i < player.hand.length; i++) {
+                const sh = this.shantenAfterDiscard(player, i);
+                if (sh < bestSh) { bestSh = sh; candidates = [i]; }
+                else if (sh === bestSh) candidates.push(i);
+            }
+            bestIdx = candidates.reduce((a, b) =>
+                this.tileValue(player.hand[a], player.hand) <= this.tileValue(player.hand[b], player.hand) ? a : b);
+        } else {
+            // 普通/新手：启发式打分，打最低分
+            let bestScore = Infinity;
+            bestIdx = 0;
+            for (let i = 0; i < player.hand.length; i++) {
+                const score = this.evalDiscard(player, i);
+                if (score < bestScore) { bestScore = score; bestIdx = i; }
             }
         }
+
+        // 失误率：以一定概率改打一张随机牌（新手会明显打错）
+        if (opts && opts.mistake && Math.random() < opts.mistake) {
+            const others = player.hand.map((_, i) => i).filter(i => i !== bestIdx);
+            if (others.length) bestIdx = others[Math.floor(Math.random() * others.length)];
+        }
+
+        // 大师防守：对手疑似听牌时优先打安全牌
+        if (opts && opts.defensive && game) {
+            const safe = this.pickSafeDiscard(player, bestIdx, game);
+            if (safe !== -1) bestIdx = safe;
+        }
+
         return bestIdx;
+    }
+
+    static shantenAfterDiscard(player, i) {
+        const counts = {};
+        for (const t of player.hand) counts[t.id] = (counts[t.id] || 0) + 1;
+        const tile = player.hand[i];
+        counts[tile.id] -= 1;
+        let sh = Shanten.standard(counts, player.melds.length);
+        if (player.melds.length === 0) sh = Math.min(sh, Shanten.qiDui(counts));
+        return sh;
     }
 
     static evalDiscard(player, idx) {
@@ -1278,22 +1463,71 @@ class AIPlayer {
     }
 
     // 是否碰
-    static shouldPeng(player, tile) {
+    static shouldPeng(player, tile, opts) {
         if (tile.suit === player.queSuit) return false;
         if (player.hasQueSuit()) return false; // 还有缺门牌不碰
         const count = player.hand.filter(t => t.suit === tile.suit && t.value === tile.value).length;
-        if (count >= 2) return Math.random() > 0.2;
-        return false;
+        if (count < 2) return false;
+        // 困难/大师：若碰后向听数变差则放弃（避免拆好搭子）
+        if (opts && opts.useShanten) {
+            const before = Shanten.of(player);
+            const after = this.shantenAfterPeng(player, tile);
+            if (after > before) return false;
+        }
+        const threshold = opts ? opts.peng : 0.8;
+        return Math.random() < threshold;
+    }
+
+    static shantenAfterPeng(player, tile) {
+        const counts = {};
+        for (const t of player.hand) counts[t.id] = (counts[t.id] || 0) + 1;
+        counts[tile.id] -= 2; // 碰：手牌去掉 2 张，副露 +1 面子
+        return Shanten.standard(counts, player.melds.length + 1);
     }
 
     // 是否杠
-    static shouldGang(player, tile) {
+    static shouldGang(player, tile, opts, isAnGang) {
         if (tile.suit === player.queSuit) return false;
         // 若该牌相邻位置有牌（可能组成顺子），降低杠的概率，避免拆散听牌型
         const neighbors = player.hand.filter(t => t.suit === tile.suit &&
             (t.value === tile.value - 1 || t.value === tile.value + 1)).length;
-        if (neighbors > 0) return Math.random() > 0.5;
+        const base = neighbors > 0 ? 0.5 : 1.0;
+        const threshold = (opts ? opts.gang : 0.6) * base;
+        if (Math.random() >= threshold) return false;
+        // 困难/大师：若杠后向听数变差则放弃
+        if (opts && opts.useShanten) {
+            const before = Shanten.of(player);
+            const after = this.shantenAfterGang(player, tile, isAnGang);
+            if (after > before) return false;
+        }
         return true;
+    }
+
+    static shantenAfterGang(player, tile, isAnGang) {
+        const counts = {};
+        for (const t of player.hand) counts[t.id] = (counts[t.id] || 0) + 1;
+        counts[tile.id] -= isAnGang ? 4 : 3; // 暗杠 4 张 / 明杠 3 张，副露 +1 面子
+        return Shanten.standard(counts, player.melds.length + 1);
+    }
+
+    // 大师防守：对手疑似听牌时，从手牌中挑一张「安全牌」（已有人打过）打出
+    static pickSafeDiscard(player, preferredIdx, game) {
+        const opps = game.players.filter(p => p.id !== player.id && !p.isHu);
+        const threatening = opps.some(p => p.melds.length >= 2 || p.discards.length >= 8);
+        if (!threatening) return -1;
+        const safeSet = new Set();
+        for (const o of opps) for (const d of o.discards) safeSet.add(d.id);
+        for (const d of player.discards) safeSet.add(d.id); // 自己打过的牌对所有人安全
+        let best = -1, bestVal = Infinity;
+        for (let i = 0; i < player.hand.length; i++) {
+            const t = player.hand[i];
+            if (t.suit === player.queSuit) continue;
+            if (safeSet.has(t.id)) {
+                const v = this.tileValue(t, player.hand);
+                if (v < bestVal) { bestVal = v; best = i; }
+            }
+        }
+        return best;
     }
 }
 
@@ -1426,6 +1660,12 @@ class MahjongGame {
         this.timers = [];
         this.pending = null;
         this.selectedIndex = -1; // 当前已抬起（待二次确认）的手牌下标，-1 表示无
+        this.aiSpeed = 'normal'; // AI 出牌速度：slow/normal/fast/lightning
+        this.aiLevel = 'normal'; // AI 难度：easy/normal/hard/master
+        try {
+            const saved = localStorage.getItem('chuanma_ailevel');
+            if (saved && ['easy', 'normal', 'hard', 'master'].includes(saved)) this.aiLevel = saved;
+        } catch (e) { /* localStorage 不可用时不报错 */ }
         this.soundEnabled = true; // 语音播报默认开启
         this.init();
     }
@@ -1445,9 +1685,21 @@ class MahjongGame {
         this.timers = [];
     }
 
-    // AI 思考延迟：3~5 秒随机，让玩家看清局势
+    // AI 思考延迟：按设置的速度档位随机，让玩家看清局势
     aiThinkDelay() {
-        return 3000 + Math.floor(Math.random() * 2000);
+        const map = {
+            slow:      [3000, 2000], // 3~5 秒
+            normal:    [1500, 1000], // 1.5~2.5 秒
+            fast:      [600, 600],   // 0.6~1.2 秒
+            lightning: [150, 200]    // 0.15~0.35 秒
+        };
+        const [min, range] = map[this.aiSpeed] || map.normal;
+        return min + Math.floor(Math.random() * range);
+    }
+
+    // 当前 AI 难度参数（集中管理 4 档的「旋钮」）
+    aiOpts() {
+        return AI_LEVELS[this.aiLevel] || AI_LEVELS.normal;
     }
 
     // 语音播报（Web Speech API，仅动作词）
@@ -1645,7 +1897,7 @@ class MahjongGame {
         // AI选择
         const aiSelections = {};
         for (let i = 1; i <= 3; i++) {
-            aiSelections[i] = AIPlayer.chooseExchange(this.players[i]);
+            aiSelections[i] = AIPlayer.chooseExchange(this.players[i], this.aiOpts());
         }
         aiSelections[0] = humanTiles;
 
@@ -1780,12 +2032,13 @@ class MahjongGame {
             this.showHumanActions(canHu, angangTile, tile);
         } else {
             // AI
+            const opts = this.aiOpts();
             this.schedule(() => {
                 if (canHu) {
                     this.doHu(player, tile, true);
                     return;
                 }
-                if (angangTile && AIPlayer.shouldGang(player, angangTile)) {
+                if (angangTile && AIPlayer.shouldGang(player, angangTile, opts, true)) {
                     this.doAnGang(player, angangTile);
                     return;
                 }
@@ -1796,24 +2049,28 @@ class MahjongGame {
                     return;
                 }
                 // 出牌
-                const idx = AIPlayer.chooseDiscard(player);
+                const idx = AIPlayer.chooseDiscard(player, opts, this);
                 this.doDiscard(player, idx);
             }, this.aiThinkDelay());
         }
     }
 
+    seatName(id) {
+        return id === 0 ? '你' : ['', '东', '北', '西'][id] || ('家' + id);
+    }
+
     showHumanActions(canHu, angangTile, drawnTile) {
         const buttons = [];
         if (canHu) {
-            buttons.push(`<button class="action-btn btn-hu" onclick="game.humanHu()">胡</button>`);
+            buttons.push(`<button class="action-btn btn-hu" onclick="game.humanHu()">胡（自摸）</button>`);
         }
         if (angangTile) {
-            buttons.push(`<button class="action-btn btn-gang" onclick="game.humanAnGang()">杠(${angangTile.toString()})</button>`);
+            buttons.push(`<button class="action-btn btn-gang" onclick="game.humanAnGang()">杠(${angangTile.toString()}·自摸)</button>`);
         }
         // 补杠
         const bugangTile = this.checkBuGang(this.players[0]);
         if (bugangTile) {
-            buttons.push(`<button class="action-btn btn-gang" onclick="game.humanBuGang()">补杠(${bugangTile.toString()})</button>`);
+            buttons.push(`<button class="action-btn btn-gang" onclick="game.humanBuGang()">补杠(${bugangTile.toString()}·自摸)</button>`);
         }
         // 仅当存在「胡/杠/补杠」等可选项时才显示「过」；普通出牌回合直接点手牌即可
         if (buttons.length > 0) {
@@ -1961,7 +2218,7 @@ class MahjongGame {
             }
             if (p.isHuman) {
                 this.showPengGangHuOptions(p, tile, 'gang');
-            } else if (AIPlayer.shouldGang(p, tile)) {
+            } else if (AIPlayer.shouldGang(p, tile, this.aiOpts())) {
                 this.schedule(() => this.doMingGang(p, tile, fromId), 1200);
             } else {
                 this.resolvePending();
@@ -1978,7 +2235,7 @@ class MahjongGame {
             }
             if (p.isHuman) {
                 this.showPengGangHuOptions(p, tile, 'peng');
-            } else if (AIPlayer.shouldPeng(p, tile)) {
+            } else if (AIPlayer.shouldPeng(p, tile, this.aiOpts())) {
                 this.schedule(() => this.doPeng(p, tile, fromId), 1200);
             } else {
                 this.resolvePending();
@@ -2001,20 +2258,21 @@ class MahjongGame {
     }
 
     showPengGangHuOptions(player, tile, type) {
+        const fromNote = `（来自${this.seatName(this.lastDiscardFrom)}）`;
         const buttons = [];
         if (type === 'hu') {
-            buttons.push(`<button class="action-btn btn-hu" onclick="game.doHuFromDiscard(${player.id})">胡</button>`);
+            buttons.push(`<button class="action-btn btn-hu" onclick="game.doHuFromDiscard(${player.id})">胡${fromNote}</button>`);
         }
         if (type === 'gang' || type === 'hu') {
             const count = player.hand.filter(t => t.suit === tile.suit && t.value === tile.value).length;
             if (count === 3) {
-                buttons.push(`<button class="action-btn btn-gang" onclick="game.doMingGangFromUI(${player.id})">杠</button>`);
+                buttons.push(`<button class="action-btn btn-gang" onclick="game.doMingGangFromUI(${player.id})">杠${fromNote}</button>`);
             }
         }
         if (type === 'peng' || type === 'gang' || type === 'hu') {
             const count = player.hand.filter(t => t.suit === tile.suit && t.value === tile.value).length;
             if (count >= 2) {
-                buttons.push(`<button class="action-btn btn-peng" onclick="game.doPengFromUI(${player.id})">碰</button>`);
+                buttons.push(`<button class="action-btn btn-peng" onclick="game.doPengFromUI(${player.id})">碰${fromNote}</button>`);
             }
         }
         buttons.push(`<button class="action-btn btn-pass" onclick="game.passAction()">过</button>`);
@@ -2461,30 +2719,69 @@ class MahjongGame {
         document.getElementById('modal-container').innerHTML = html;
     }
 
-    // 番数设置面板
-    showFanSettings() {
-        const cur = this.maxFan || '';
-        const presets = [
+    // 设置中心：番数上限 + AI 速度
+    showSettings() {
+        const curFan = this.maxFan || '';
+        const fanPresets = [
             { label: '不封顶', val: '' },
             { label: '8', val: '8' },
             { label: '16', val: '16' },
             { label: '32', val: '32' },
             { label: '64', val: '64' }
         ];
-        const presetBtns = presets.map(pr =>
-            `<button class="settings-preset${String(cur) === pr.val ? ' active' : ''}" data-val="${pr.val}" onclick="document.getElementById('fan-cap-input').value='${pr.val}';document.querySelectorAll('.settings-preset').forEach(b=>b.classList.remove('active'));this.classList.add('active');">${pr.label}</button>`
+        const fanBtns = fanPresets.map(pr =>
+            `<button class="settings-preset fan-preset${String(curFan) === pr.val ? ' active' : ''}" data-val="${pr.val}" onclick="document.getElementById('fan-cap-input').value='${pr.val}';document.querySelectorAll('.fan-preset').forEach(b=>b.classList.remove('active'));this.classList.add('active');">${pr.label}</button>`
+        ).join('');
+
+        const speedPresets = [
+            { label: '慢速', val: 'slow' },
+            { label: '正常', val: 'normal' },
+            { label: '快速', val: 'fast' },
+            { label: '闪电', val: 'lightning' }
+        ];
+        const speedBtns = speedPresets.map(sp =>
+            `<button class="settings-preset speed-preset${this.aiSpeed === sp.val ? ' active' : ''}" data-val="${sp.val}" onclick="document.getElementById('ai-speed-input').value='${sp.val}';document.querySelectorAll('.speed-preset').forEach(b=>b.classList.remove('active'));this.classList.add('active');">${sp.label}</button>`
+        ).join('');
+
+        const levelPresets = [
+            { label: '新手', val: 'easy' },
+            { label: '普通', val: 'normal' },
+            { label: '困难', val: 'hard' },
+            { label: '大师', val: 'master' }
+        ];
+        const levelBtns = levelPresets.map(lp =>
+            `<button class="settings-preset level-preset${this.aiLevel === lp.val ? ' active' : ''}" data-val="${lp.val}" onclick="document.getElementById('ai-level-input').value='${lp.val}';document.querySelectorAll('.level-preset').forEach(b=>b.classList.remove('active'));this.classList.add('active');">${lp.label}</button>`
         ).join('');
 
         const html = `
             <div class="modal-overlay">
                 <div class="modal lb-modal">
-                    <h2>⚙️ 番数设置</h2>
-                    <p style="font-size:13px;color:#bbb;">设置最高番数上限（仅封顶计分，明细仍显示真实番数）。不填 = 不封顶。</p>
-                    <div class="settings-presets">${presetBtns}</div>
-                    <label style="font-size:13px;color:#ccc;">自定义上限（正整数）</label>
-                    <input id="fan-cap-input" class="settings-input" type="number" min="1" step="1" placeholder="不封顶" value="${cur}">
-                    <div style="display:flex;gap:10px;margin-top:6px;">
-                        <button class="modal-btn primary" onclick="game.saveFanCap(document.getElementById('fan-cap-input').value)">💾 保存</button>
+                    <h2>⚙️ 设置中心</h2>
+
+                    <div class="settings-section">
+                        <h3>📊 番数上限</h3>
+                        <p style="font-size:13px;color:#666;">设置最高番数上限（仅封顶计分，明细仍显示真实番数）。不填 = 不封顶。</p>
+                        <div class="settings-presets">${fanBtns}</div>
+                        <label style="font-size:13px;color:#555;">自定义上限（正整数）</label>
+                        <input id="fan-cap-input" class="settings-input" type="number" min="1" step="1" placeholder="不封顶" value="${curFan}">
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>🤖 AI 难度</h3>
+                        <p style="font-size:13px;color:#666;">控制电脑棋力强弱（与出牌速度无关）。新手会失误、困难/大师用向听数精算，大师还会防点炮。</p>
+                        <div class="settings-presets">${levelBtns}</div>
+                        <input id="ai-level-input" type="hidden" value="${this.aiLevel}">
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>🤖 AI 速度</h3>
+                        <p style="font-size:13px;color:#666;">控制 AI 出牌思考的快慢。</p>
+                        <div class="settings-presets">${speedBtns}</div>
+                        <input id="ai-speed-input" type="hidden" value="${this.aiSpeed}">
+                    </div>
+
+                    <div style="display:flex;gap:10px;margin-top:14px;">
+                        <button class="modal-btn primary" onclick="game.saveSettings()">💾 保存</button>
                         <button class="modal-btn" onclick="document.getElementById('modal-container').innerHTML=''">关闭</button>
                     </div>
                 </div>
@@ -2493,11 +2790,20 @@ class MahjongGame {
         document.getElementById('modal-container').innerHTML = html;
     }
 
-    saveFanCap(val) {
-        val = (val === '' || val === null || val === undefined) ? null : parseInt(val, 10);
-        this.maxFan = (val === null || isNaN(val) || val < 1) ? null : val;
+    saveSettings() {
+        // 番数上限
+        const fanVal = document.getElementById('fan-cap-input').value;
+        const f = (fanVal === '' || fanVal === null) ? null : parseInt(fanVal, 10);
+        this.maxFan = (f === null || isNaN(f) || f < 1) ? null : f;
+        // AI 速度
+        const sp = document.getElementById('ai-speed-input').value;
+        if (['slow', 'normal', 'fast', 'lightning'].includes(sp)) this.aiSpeed = sp;
+        // AI 难度
+        const lvl = document.getElementById('ai-level-input').value;
+        if (['easy', 'normal', 'hard', 'master'].includes(lvl)) this.aiLevel = lvl;
+        try { localStorage.setItem('chuanma_ailevel', this.aiLevel); } catch (e) { /* 忽略 */ }
         document.getElementById('modal-container').innerHTML = '';
-        this.showToast(this.maxFan ? `最高番数已设为 ${this.maxFan}` : '已取消封顶（不封顶）');
+        this.showToast('设置已保存');
     }
 
     // 积分榜 + 历史对局弹窗
