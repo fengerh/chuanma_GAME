@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>四川麻将 - 血战到底 v20260721.2310</title>
+<title>四川麻将 - 血战到底 v20260723.1720</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -784,6 +784,7 @@ body {
     font-size: 13px;
     margin-top: 5px;
     text-align: center;
+    min-height: 18px;   /* 预留高度，避免有/无提示文字时容器高度变化导致手牌跳动 */
 }
 
 /* ===== 移动端横屏适配（iPhone / iPad 横屏）===== */
@@ -1029,8 +1030,17 @@ class HuChecker {
 
     static isQiDui(counts) {
         const values = Object.values(counts);
-        if (values.length !== 7) return false;
-        return values.every(v => v === 2 || v === 4);
+        // 普通七对：7 个 key，每个 count=2（共 14 张）
+        // 龙七对（七对带根）：6 个 key，5×count2 + 1×count4（共 14 张）
+        if (values.length === 7) {
+            return values.every(v => v === 2 || v === 4);
+        }
+        if (values.length === 6) {
+            const fours = values.filter(v => v === 4).length;
+            const twos = values.filter(v => v === 2).length;
+            return fours === 1 && twos === 5;
+        }
+        return false;
     }
 
     static checkStandard(counts) {
@@ -1465,7 +1475,6 @@ class AIPlayer {
     // 是否碰
     static shouldPeng(player, tile, opts) {
         if (tile.suit === player.queSuit) return false;
-        if (player.hasQueSuit()) return false; // 还有缺门牌不碰
         const count = player.hand.filter(t => t.suit === tile.suit && t.value === tile.value).length;
         if (count < 2) return false;
         // 困难/大师：若碰后向听数变差则放弃（避免拆好搭子）
@@ -2161,23 +2170,26 @@ class MahjongGame {
             const i = (fromId + step) % 4;
             const p = this.players[i];
             if (p.isHu) continue;
-            if (p.hasQueSuit()) continue; // 还有缺门牌不能操作
 
-            // 检查胡（收集全部，支持一炮多响/血战到底多人同胡）
+            // 该牌是缺门花色：碰/杠会把手牌永久染上缺门牌（无法胡牌），故禁止；
+            // 但手牌含缺门≠不能操作——碰/杠非缺门牌、之后清掉缺门牌即可。
+            const isQueTile = p.queSuit && tile.suit === p.queSuit;
+
+            // 检查胡（点炮）：胡牌时手牌不得含缺门牌
             const testHand = [...p.hand, tile];
-            if (HuChecker.canHu(testHand, p.melds)) {
+            if (!p.hasQueSuit() && HuChecker.canHu(testHand, p.melds)) {
                 huPlayers.push(p);
             }
 
-            // 检查杠（手牌有3张相同的）
+            // 检查杠/碰：仅在该牌本身就是缺门花色时跳过
             const count = p.hand.filter(t => t.suit === tile.suit && t.value === tile.value).length;
-            if (!gangPlayer && count === 3) {
-                gangPlayer = p;
-            }
-
-            // 检查碰
-            if (!pengPlayer && count >= 2) {
-                pengPlayer = p;
+            if (!isQueTile) {
+                if (!gangPlayer && count === 3) {
+                    gangPlayer = p;
+                }
+                if (!pengPlayer && count >= 2) {
+                    pengPlayer = p;
+                }
             }
         }
 
@@ -2207,6 +2219,13 @@ class MahjongGame {
                 this.resolvePending();
             }, 1200);
             return;
+        }
+
+        // 胡牌发生后该牌已被收走，碰/杠作废（胡优先级高于碰/杠）
+        // 一炮多响全部结算完后，不得再给其他人弹碰/杠
+        if (pend.huOccurred) {
+            pend.gangPlayer = null;
+            pend.pengPlayer = null;
         }
 
         if (pend.gangPlayer) {
@@ -2297,13 +2316,19 @@ class MahjongGame {
 
     doMingGangFromUI(pid) {
         document.getElementById('action-buttons').innerHTML = '';
-        if (this.pending) this.pending.huPlayers = []; // 杠吃掉该牌，其余可胡者不再胡
+        if (this.pending) {
+            this.pending.huPlayers = [];   // 杠吃掉该牌
+            this.pending.pengPlayer = null; // 对方碰的权利作废
+        }
         this.doMingGang(this.players[pid], this.pendingTile, this.lastDiscardFrom);
     }
 
     doPengFromUI(pid) {
         document.getElementById('action-buttons').innerHTML = '';
-        if (this.pending) this.pending.huPlayers = []; // 碰吃掉该牌，其余可胡者不再胡
+        if (this.pending) {
+            this.pending.huPlayers = [];   // 碰吃掉该牌
+            this.pending.gangPlayer = null; // 对方杠的权利作废
+        }
         this.doPeng(this.players[pid], this.pendingTile, this.lastDiscardFrom);
     }
 
