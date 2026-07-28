@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>四川麻将 - 血战到底 v20260723.1720</title>
+<title>四川麻将 - 血战到底 v20260728.1950</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -225,6 +225,28 @@ body {
 #player-left .tile-back {
     width: 42px;
     height: 30px;
+}
+
+/* 胡牌展示：牌桌上高亮显示最后一张胡的牌 */
+.hu-win-tile {
+    position: relative;
+    border: 2px solid #ffd700 !important;
+    box-shadow: 0 0 8px 2px rgba(255, 215, 0, 0.7);
+    margin-left: 8px;
+}
+.hu-win-tile::after {
+    content: '胡';
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    background: #e63946;
+    color: #fff;
+    font-size: 11px;
+    line-height: 14px;
+    height: 14px;
+    padding: 0 3px;
+    border-radius: 7px;
+    font-weight: bold;
 }
 
 /* 弃牌区 */
@@ -560,8 +582,8 @@ body {
 .table-seats {
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    padding: 18px 14px;
+    gap: 7px;
+    padding: 10px 14px;
     margin: 6px 0 4px;
     border-radius: 14px;
     background: linear-gradient(160deg, rgba(26,92,42,0.10), rgba(26,92,42,0.05));
@@ -571,10 +593,14 @@ body {
 .seat-row.center { justify-content: center; }
 .seat-row.between { justify-content: space-between; }
 .seat {
-    min-width: 84px;
-    padding: 10px 18px;
+    min-width: 104px;
+    padding: 5px 16px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
     text-align: center;
-    border-radius: 12px;
+    border-radius: 10px;
     background: rgba(255,255,255,0.92);
     border: 1px solid rgba(0,0,0,0.06);
     box-shadow: 0 2px 6px rgba(0,0,0,0.06);
@@ -589,10 +615,17 @@ body {
     font-size: 14px;
     font-weight: 600;
     color: #333;
-    margin-bottom: 4px;
 }
 .seat-score {
     font-size: 16px;
+    font-weight: 700;
+}
+/* 积分榜分区标题：可折叠（走势图默认收起） */
+.lb-collapsible { cursor: pointer; user-select: none; }
+.lb-collapsible .lb-arrow {
+    display: inline-block;
+    margin-left: 6px;
+    color: #1a5c2a;
     font-weight: 700;
 }
 .table-empty {
@@ -625,7 +658,29 @@ body {
     padding: 0 8px 8px;
 }
 /* 积分榜弹窗加宽，避免明细被截断 */
-.lb-modal { max-width: 760px; }
+.lb-modal { max-width: 760px; max-height: 90vh; overflow-y: auto; }
+/* 积分走势图表 */
+.lb-chart-wrap {
+    background: #ffffff;
+    border: 1px solid rgba(26,92,42,0.18);
+    border-radius: 14px;
+    padding: 10px 12px 8px;
+    margin: 6px 0 4px;
+}
+#score-chart { display: block; width: 100%; }
+.lb-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    justify-content: center;
+    margin-top: 6px;
+    font-size: 12px;
+    color: #555;
+}
+.lg-item { display: inline-flex; align-items: center; gap: 5px; }
+.lg-item i {
+    width: 14px; height: 4px; border-radius: 2px; display: inline-block;
+}
 /* 历史明细行：分数与状态同一行展示，整行可换行不截断 */
 .hist-detail-row {
     padding: 8px 15px;
@@ -1295,7 +1350,15 @@ const AI_LEVELS = {
     easy:   { label: '新手', mistake: 0.35, peng: 0.85, gang: 0.30, useShanten: false, defensive: false, badExchange: 0.40 },
     normal: { label: '普通', mistake: 0.10, peng: 0.80, gang: 0.60, useShanten: false, defensive: false, badExchange: 0.0 },
     hard:   { label: '困难', mistake: 0.02, peng: 0.95, gang: 0.80, useShanten: true,  defensive: false, badExchange: 0.0 },
-    master: { label: '大师', mistake: 0.00, peng: 1.00, gang: 0.90, useShanten: true,  defensive: true,  badExchange: 0.0 },
+    master: { label: '大师', mistake: 0.00, peng: 1.00, gang: 0.90, useShanten: true,  defensive: true,  badExchange: 0.0, route: true },
+};
+
+// 大师档「大牌进攻路线」门槛（集中管理，便于调参）
+const ROUTE_CONFIG = {
+    qingyiseMinSuit: 10,        // 规则1：自家目标门 ≥10 张，无视三家缺牌即走清一色
+    qingyiseMinSuitWithQue: 8,  // 规则2：自家目标门 ≥8 张且三家都缺该门即走清一色
+    pengpengMinPairs: 3,   // 手牌对子(含刻子)达到该数量 → 走碰碰胡
+    routeMinShanten: 2,    // 向听数 ≥ 该值才转路线（激进：≥2 即转）
 };
 
 // ==================== AI策略 ====================
@@ -1379,16 +1442,53 @@ class AIPlayer {
 
     // 选择定缺
     static chooseQue(player) {
+        // 选「最该缺」的门：用连子质量打分（evalExchangeSuit 越高=越孤立/越该缺），
+        // 综合张数与搭子连接质量，而非单纯张数最少。
         let bestSuit = null;
-        let minCount = Infinity;
+        let bestScore = -Infinity;
         for (const suit of SUITS) {
-            const count = player.hand.filter(t => t.suit === suit).length;
-            if (count < minCount) {
-                minCount = count;
-                bestSuit = suit;
-            }
+            const score = this.evalExchangeSuit(player.hand, suit);
+            if (score > bestScore) { bestScore = score; bestSuit = suit; }
         }
         return bestSuit;
+    }
+
+    // 大师档「大牌进攻路线」检测（纯函数，每次决策独立调用，AIPlayer 无实例状态）
+    // 返回 null | { type:'qingyise', target } | { type:'pengpeng' }
+    static detectRoute(player, game, opts) {
+        if (!(opts && opts.route) || !game) return null;
+        const me = game.players.indexOf(player);
+        const others = game.players.filter((p, i) => i !== me);
+        // 清一色路线：以「自己非缺门中张数最多的门」为目标门
+        const nonQueSuits = SUITS.filter(s => s !== player.queSuit);
+        let bestSuit = null, bestCount = 0;
+        for (const s of nonQueSuits) {
+            const c = player.hand.filter(t => t.suit === s).length;
+            if (c > bestCount) { bestCount = c; bestSuit = s; }
+        }
+        if (bestSuit) {
+            // 规则1：自家该门 ≥10 张，无视三家缺牌，积极做清一色
+            if (bestCount >= ROUTE_CONFIG.qingyiseMinSuit) {
+                return { type: 'qingyise', target: bestSuit };
+            }
+            // 规则2：自家该门 ≥8 张，且另外三家都缺这一门
+            const allLack = others.every(p => p.queSuit === bestSuit);
+            if (bestCount >= ROUTE_CONFIG.qingyiseMinSuitWithQue && allLack) {
+                return { type: 'qingyise', target: bestSuit };
+            }
+        }
+        // 碰碰胡路线（清一色不成立时的备选）：非缺门的对子(含刻子)足够多且向听够高
+        const cnt = {};
+        for (const t of player.hand) {
+            if (t.suit === player.queSuit) continue; // 缺门牌须打掉，不计入有效对子
+            cnt[t.suit + '_' + t.value] = (cnt[t.suit + '_' + t.value] || 0) + 1;
+        }
+        let pairs = 0;
+        for (const k in cnt) pairs += Math.floor(cnt[k] / 2);
+        if (pairs >= ROUTE_CONFIG.pengpengMinPairs && Shanten.of(player) >= ROUTE_CONFIG.routeMinShanten) {
+            return { type: 'pengpeng' };
+        }
+        return null;
     }
 
     // 选择出牌
@@ -1404,22 +1504,42 @@ class AIPlayer {
         const useSh = opts && opts.useShanten;
         let bestIdx;
         if (useSh) {
-            // 困难/大师：枚举弃牌算向听数，取最小；同向听时保留更有用的牌
+            // 困难/大师：先取「最小向听」候选集，再在其中按分数选弃牌。
+            // 大师档（route）会叠加「大牌进攻路线」倾向：清一色优先打非目标门、碰碰胡优先打孤张。
+            const route = this.detectRoute(player, game, opts);
             let bestSh = 99;
-            let candidates = [];
+            const cands = [];
             for (let i = 0; i < player.hand.length; i++) {
                 const sh = this.shantenAfterDiscard(player, i);
-                if (sh < bestSh) { bestSh = sh; candidates = [i]; }
-                else if (sh === bestSh) candidates.push(i);
+                if (sh < bestSh) { bestSh = sh; cands.length = 0; cands.push(i); }
+                else if (sh === bestSh) cands.push(i);
             }
-            bestIdx = candidates.reduce((a, b) =>
-                this.tileValue(player.hand[a], player.hand) <= this.tileValue(player.hand[b], player.hand) ? a : b);
+            bestIdx = cands[0];
+            let bestScore = -Infinity;
+            const handCnt = {};
+            for (const t of player.hand) handCnt[t.suit + '_' + t.value] = (handCnt[t.suit + '_' + t.value] || 0) + 1;
+            for (const i of cands) {
+                const tile = player.hand[i];
+                const uke = this.ukeire(player, i, game).total;
+                const keep = this.fanDirectionScore(player, i, game); // 越大越该留
+                let score = uke * 1000 + keep;                  // 进张主导、番向次级
+                if (route) {
+                    if (route.type === 'qingyise') {
+                        // 清一色：非目标门优先打出（目标门留着收敛）；目标门内部退回基础分
+                        if (tile.suit !== route.target) score += 1000000;
+                    } else if (route.type === 'pengpeng') {
+                        // 碰碰胡：孤张(手牌仅 1 张)优先打出，对子/刻子成员保留
+                        if (handCnt[tile.suit + '_' + tile.value] === 1) score += 1000000;
+                    }
+                }
+                if (score > bestScore) { bestScore = score; bestIdx = i; }
+            }
         } else {
             // 普通/新手：启发式打分，打最低分
             let bestScore = Infinity;
             bestIdx = 0;
             for (let i = 0; i < player.hand.length; i++) {
-                const score = this.evalDiscard(player, i);
+                const score = this.evalDiscard(player, i, game);
                 if (score < bestScore) { bestScore = score; bestIdx = i; }
             }
         }
@@ -1449,40 +1569,158 @@ class AIPlayer {
         return sh;
     }
 
-    static evalDiscard(player, idx) {
+    // 综合向听数（整合标准型与七对，复用 Shanten）
+    static shantenOf(counts, meldsCount) {
+        let sh = Shanten.standard(counts, meldsCount);
+        if (meldsCount === 0) sh = Math.min(sh, Shanten.qiDui(counts));
+        return sh;
+    }
+
+    // 统计某候选弃牌后，各牌型在牌墙中还剩几张（已见 = 自己手牌(除候选)+全场面子弃牌+副露）
+    static remainingCounts(player, candidateId, game) {
+        const vis = {};
+        const add = (t) => { vis[t.id] = (vis[t.id] || 0) + 1; };
+        for (const p of game.players) {
+            for (const t of p.hand) {
+                if (p === player && t.id === candidateId) continue; // 候选已被打出，不占墙
+                add(t);
+            }
+            for (const d of p.discards) add(d);
+            for (const m of p.melds) for (const t of m.tiles) add(t);
+        }
+        return vis;
+    }
+
+    // 进张数（ukeire）：弃掉 candidateIdx 后，枚举 27 种牌，统计「能降低向听且墙里还有」的总张数
+    static ukeire(player, candidateIdx, game) {
+        const counts = {};
+        for (const t of player.hand) counts[t.id] = (counts[t.id] || 0) + 1;
+        const cand = player.hand[candidateIdx];
+        counts[cand.id] -= 1;
+        if (counts[cand.id] <= 0) delete counts[cand.id];
+        const baseSh = this.shantenOf(counts, player.melds.length);
+        const vis = this.remainingCounts(player, cand.id, game);
+        let total = 0;
+        const types = [];
+        for (const s of SUITS) for (let v = 1; v <= 9; v++) types.push(`${s}_${v}`);
+        for (const ty of types) {
+            const cur = counts[ty] || 0;
+            if (cur >= 4) continue;
+            counts[ty] = cur + 1;
+            const sh = this.shantenOf(counts, player.melds.length);
+            if (sh < baseSh) total += Math.max(0, 4 - (vis[ty] || 0));
+            counts[ty] = cur;
+        }
+        return { total, baseSh };
+    }
+
+    // 判断某张牌在「墙内剩余 + 自家手牌」条件下，是否还能参与任一顺子。
+    // 用于：当相邻牌被碰/杠/打光导致顺子无法完成时，取消其留牌加成、加重孤张惩罚。
+    // 无 game 时退化为「可成」，保证普通/新手档向后兼容。
+    static canFormSequence(tile, game, player) {
+        if (!game) return true;
+        const handIds = new Set(player.hand.map(t => t.id));
+        const vis = this.remainingCounts(player, null, game);
+        const v = tile.value;
+        const windows = [[v - 2, v - 1, v], [v - 1, v, v + 1], [v, v + 1, v + 2]];
+        for (const [a, b, c] of windows) {
+            if (a < 1 || c > 9) continue;
+            let ok = true;
+            for (const x of [a, b, c]) {
+                if (x === v) continue; // 自己这张已确定
+                const id = `${tile.suit}_${x}`;
+                const inHand = handIds.has(id);
+                const left = Math.max(0, 4 - (vis[id] || 0));
+                if (!inHand && left <= 0) { ok = false; break; } // 该必需牌既不在手也摸不到
+            }
+            if (ok) return true;
+        }
+        return false;
+    }
+
+    // 番向保留分：越高代表越「该留」，用于进张相同时的次级排序
+    static fanDirectionScore(player, idx, game) {
+        const tile = player.hand[idx];
+        const others = player.hand.filter((_, i) => i !== idx);
+        const sameSuit = others.filter(t => t.suit === tile.suit);
+        const v = tile.value;
+        let keep = 0;
+        const sameCount = sameSuit.filter(t => t.value === v).length;
+        const hasAdj = sameSuit.some(t => t.value === v - 1 || t.value === v + 1); // 相邻搭子
+        const hasGap = sameSuit.some(t => t.value === v - 2 || t.value === v + 2); // 间隔
+        // 该牌在墙内剩余 + 手牌条件下是否还能成顺子（相邻牌被杠/碰/打光则失效）
+        const seqOk = this.canFormSequence(tile, game, player);
+        if (sameCount >= 1) keep += 40;   // 保留成对/成刻的牌（对对胡倾向）
+        if (hasAdj && seqOk) keep += 20;   // 搭子：仅当顺子仍可完成时加分
+        if (hasGap && seqOk) keep += 8;    // 间隔：仅当搭桥牌仍可摸到时加分
+        // 向清一色靠拢：两门非缺牌数量差≥3 时，少数门里的牌保留分降低（优先打出）
+        const nonQue = SUITS.filter(s => s !== player.queSuit);
+        if (nonQue.length === 2) {
+            const cA = player.hand.filter(t => t.suit === nonQue[0]).length;
+            const cB = player.hand.filter(t => t.suit === nonQue[1]).length;
+            if (Math.abs(cA - cB) >= 3) {
+                const minority = cA < cB ? nonQue[0] : nonQue[1];
+                if (tile.suit === minority) keep -= 25;
+            }
+        }
+        if (sameCount === 0 && !hasAdj && !hasGap) {
+            // 纯孤张：相邻顺子伙伴全死绝 → 加重惩罚，明确信号「干等无用，应打出换思路」
+            keep += seqOk ? -5 : -15;
+        }
+        return keep;
+    }
+
+    static evalDiscard(player, idx, game) {
         const tile = player.hand[idx];
         const others = player.hand.filter((_, i) => i !== idx);
         let score = 0;
         const values = others.filter(t => t.suit === tile.suit).map(t => t.value);
         const v = tile.value;
+        // 该牌在墙内剩余 + 手牌条件下是否还能成顺子（相邻牌被杠/碰/打光则失效）
+        const seqOk = this.canFormSequence(tile, game, player);
 
         // 孤张惩罚
         if (!values.includes(v - 1) && !values.includes(v + 1) &&
             !values.includes(v - 2) && !values.includes(v + 2) &&
             !values.includes(v)) {
-            score -= 50;
+            // 纯孤张且顺子伙伴全死绝 → 加重惩罚，不再干等已死绝的顺子
+            score += seqOk ? -50 : -70;
         }
         // 边张惩罚
         if (v === 1 || v === 9) score -= 10;
         // 有对子加分
         if (values.includes(v)) score += 20;
-        // 有搭子加分
-        if (values.includes(v - 1) || values.includes(v + 1)) score += 15;
+        // 有搭子加分：仅当顺子仍可完成时加分（否则相邻牌已死，搭子无意义）
+        if ((values.includes(v - 1) || values.includes(v + 1)) && seqOk) score += 15;
 
         return score;
     }
 
     // 是否碰
-    static shouldPeng(player, tile, opts) {
+    static shouldPeng(player, tile, opts, game) {
         if (tile.suit === player.queSuit) return false;
         const count = player.hand.filter(t => t.suit === tile.suit && t.value === tile.value).length;
-        if (count < 2) return false;
-        // 困难/大师：若碰后向听数变差则放弃（避免拆好搭子）
+        if (count !== 2) return false;
+        // 困难/大师：完全由收益决定，去掉随机
         if (opts && opts.useShanten) {
+            const route = this.detectRoute(player, game, opts);
+            // 大师档路线：清一色只碰目标门、碰碰胡积极碰对子凑刻子
+            if (route) {
+                if (route.type === 'qingyise' && tile.suit !== route.target) return false; // 非目标门不碰，避免留杂门
+                const before = Shanten.of(player);
+                const after = this.shantenAfterPeng(player, tile);
+                return after <= before;   // 碰后向听不差即碰（激进凑刻子，且保护不拆听）
+            }
             const before = Shanten.of(player);
             const after = this.shantenAfterPeng(player, tile);
-            if (after > before) return false;
+            if (after > before) return false;          // 碰后向听变差 → 不碰（避免拆好搭子）
+            if (after < before) return true;            // 碰后向听变好 → 碰
+            // 向听不变：仅当该对子「无相邻牌」（纯对子，可锁刻子且不拆顺子）时才碰
+            const hasNeighbor = player.hand.some(t =>
+                t.suit === tile.suit && (t.value === tile.value - 1 || t.value === tile.value + 1));
+            return !hasNeighbor;
         }
+        // 普通/新手：保留原随机概率手感
         const threshold = opts ? opts.peng : 0.8;
         return Math.random() < threshold;
     }
@@ -1491,32 +1729,59 @@ class AIPlayer {
         const counts = {};
         for (const t of player.hand) counts[t.id] = (counts[t.id] || 0) + 1;
         counts[tile.id] -= 2; // 碰：手牌去掉 2 张，副露 +1 面子
-        return Shanten.standard(counts, player.melds.length + 1);
+        if (counts[tile.id] <= 0) delete counts[tile.id];
+        // 碰后还要打出一张，取打出后向听最小（与 13 张整手公平比较）
+        return this.shantenOfBestDiscard(counts, player.melds.length + 1);
+    }
+
+    // 给定「已副露 meldsCount、再打一张后的手牌计数」，枚举打出每张求最小向听
+    static shantenOfBestDiscard(counts, meldsCount) {
+        const ids = Object.keys(counts).filter(k => counts[k] > 0);
+        if (ids.length === 0) return Shanten.standard(counts, meldsCount);
+        let best = 99;
+        for (const k of ids) {
+            counts[k] -= 1;
+            if (counts[k] <= 0) delete counts[k];
+            const sh = this.shantenOf(counts, meldsCount);
+            if (sh < best) best = sh;
+            counts[k] = (counts[k] || 0) + 1;
+        }
+        return best;
     }
 
     // 是否杠
-    static shouldGang(player, tile, opts, isAnGang) {
+    static shouldGang(player, tile, opts, isAnGang, game) {
         if (tile.suit === player.queSuit) return false;
-        // 若该牌相邻位置有牌（可能组成顺子），降低杠的概率，避免拆散听牌型
+        // 若该牌相邻位置有牌（可能组成顺子），降低杠的意愿，避免拆散听牌型
         const neighbors = player.hand.filter(t => t.suit === tile.suit &&
             (t.value === tile.value - 1 || t.value === tile.value + 1)).length;
         const base = neighbors > 0 ? 0.5 : 1.0;
-        const threshold = (opts ? opts.gang : 0.6) * base;
-        if (Math.random() >= threshold) return false;
-        // 困难/大师：若杠后向听数变差则放弃
+        // 困难/大师：由收益决定，去掉随机
         if (opts && opts.useShanten) {
+            const route = this.detectRoute(player, game, opts);
+            // 大师档路线：清一色只杠目标门、碰碰胡积极杠对子凑刻子
+            if (route) {
+                if (route.type === 'qingyise' && tile.suit !== route.target) return false; // 非目标门不杠，避免留杂门
+                const before = Shanten.of(player);
+                const after = this.shantenAfterGang(player, tile, isAnGang);
+                return after <= before;   // 杠后向听不差即杠（激进凑刻子，且保护不拆听）
+            }
             const before = Shanten.of(player);
             const after = this.shantenAfterGang(player, tile, isAnGang);
-            if (after > before) return false;
+            return after <= before;   // 杠后向听不差则杠（杠带根×2，且能补摸）
         }
-        return true;
+        // 普通/新手：保留原随机概率手感
+        const threshold = (opts ? opts.gang : 0.6) * base;
+        return Math.random() < threshold;
     }
 
     static shantenAfterGang(player, tile, isAnGang) {
         const counts = {};
         for (const t of player.hand) counts[t.id] = (counts[t.id] || 0) + 1;
         counts[tile.id] -= isAnGang ? 4 : 3; // 暗杠 4 张 / 明杠 3 张，副露 +1 面子
-        return Shanten.standard(counts, player.melds.length + 1);
+        if (counts[tile.id] <= 0) delete counts[tile.id];
+        // 杠后还要打出一张，取打出后向听最小（与 13 张整手公平比较）
+        return this.shantenOfBestDiscard(counts, player.melds.length + 1);
     }
 
     // 大师防守：对手疑似听牌时，从手牌中挑一张「安全牌」（已有人打过）打出
@@ -2047,7 +2312,7 @@ class MahjongGame {
                     this.doHu(player, tile, true);
                     return;
                 }
-                if (angangTile && AIPlayer.shouldGang(player, angangTile, opts, true)) {
+                if (angangTile && AIPlayer.shouldGang(player, angangTile, opts, true, this)) {
                     this.doAnGang(player, angangTile);
                     return;
                 }
@@ -2187,7 +2452,7 @@ class MahjongGame {
                 if (!gangPlayer && count === 3) {
                     gangPlayer = p;
                 }
-                if (!pengPlayer && count >= 2) {
+                if (!pengPlayer && count === 2) {
                     pengPlayer = p;
                 }
             }
@@ -2237,7 +2502,7 @@ class MahjongGame {
             }
             if (p.isHuman) {
                 this.showPengGangHuOptions(p, tile, 'gang');
-            } else if (AIPlayer.shouldGang(p, tile, this.aiOpts())) {
+            } else if (AIPlayer.shouldGang(p, tile, this.aiOpts(), false, this)) {
                 this.schedule(() => this.doMingGang(p, tile, fromId), 1200);
             } else {
                 this.resolvePending();
@@ -2254,7 +2519,7 @@ class MahjongGame {
             }
             if (p.isHuman) {
                 this.showPengGangHuOptions(p, tile, 'peng');
-            } else if (AIPlayer.shouldPeng(p, tile, this.aiOpts())) {
+            } else if (AIPlayer.shouldPeng(p, tile, this.aiOpts(), this)) {
                 this.schedule(() => this.doPeng(p, tile, fromId), 1200);
             } else {
                 this.resolvePending();
@@ -2371,6 +2636,7 @@ class MahjongGame {
 
         const fanInfo = HuChecker.calcFan(player, tile, isZiMo, isQiangGang);
         player.huInfo = fanInfo;
+        player.huInfo.tile = tile; // 留存最后一张胡的牌（自摸=摸到的牌、点炮/抢杠=胡的那张牌）
         player.huInfo.isZiMo = isZiMo;
         player.huInfo.fromId = isZiMo ? player.id : this.lastDiscardFrom;
         player.huInfo.isQiangGang = isQiangGang;
@@ -2385,14 +2651,15 @@ class MahjongGame {
         this.speak('胡');
 
         // 检查是否结束 / 推进回合
-        // advanceTurn=false 时（一炮多响）不自推，交由 resolvePending 在全部胡结算完后统一推进
+        // advanceTurn=false 时（点炮/一炮多响）不自推，交由 resolvePending 在全部胡结算完后统一推进
+        // 先行记录胡牌者：点炮/一炮多响经 resolvePending 推进时，也从胡牌者下家继续（血战到底规则）
+        this.currentPlayer = player.id;
         if (advanceTurn) {
             const activePlayers = this.players.filter(p => !p.isHu);
             if (activePlayers.length <= 1 || this.huCount >= 3) {
                 this.schedule(() => this.endGame(), 2000);
             } else {
                 // 血战到底继续：从胡牌者的下家开始
-                this.currentPlayer = player.id;
                 this.schedule(() => {
                     this.nextPlayer();
                     this.gameLoop();
@@ -2422,6 +2689,12 @@ class MahjongGame {
     }
 
     doPeng(player, tile, fromId) {
+        // 防御性兜底：手牌里同名牌已有 3 张时应走明杠，避免碰后手牌残留同牌
+        const pengCount = player.hand.filter(t => t.suit === tile.suit && t.value === tile.value).length;
+        if (pengCount === 3) {
+            this.doMingGang(player, tile, fromId);
+            return;
+        }
         // 从手牌移除2张
         let removed = 0;
         player.hand = player.hand.filter(t => {
@@ -2668,6 +2941,13 @@ class MahjongGame {
 
     endGame() {
         this.phase = 'end';
+        // 补算未胡玩家的听牌状态（否则结算面板会误显示"未听"）
+        // 注：三家胡牌结束不做查叫赔付，仅流局 liuJu 才赔付
+        for (const p of this.players) {
+            if (p.isHu) continue;
+            p.tingFan = this.tingMaxFan(p);
+            p.isTing = p.tingFan > 0;
+        }
         this.showResultModal('');
     }
 
@@ -2693,7 +2973,8 @@ class MahjongGame {
                 const hi = p.huInfo;
                 const fromName = hi.isZiMo ? '' : (this.players[hi.fromId] ? (this.players[hi.fromId].isHuman ? '你' : 'AI·' + ['','东','北','西'][hi.fromId]) : '');
                 const huWay = hi.isZiMo ? '自摸' : (hi.isQiangGang ? '抢杠胡' : ('点炮 · 来源: ' + fromName));
-                detail += `<div class="result-detail">${huWay} ｜ ${hi.fanList.join('+')} = ${hi.fan}番</div>`;
+                const tileName = hi.tile ? hi.tile.toString() : '';
+                detail += `<div class="result-detail">${huWay} ｜ 胡牌: ${tileName} ｜ ${hi.fanList.join('+')} = ${hi.fan}番</div>`;
             }
             if (p.gangScore > 0) {
                 const g = p.gangCounts;
@@ -2834,6 +3115,7 @@ class MahjongGame {
     // 积分榜 + 历史对局弹窗
     showLeaderboard() {
         const names = ['你', 'AI·东', 'AI·北', 'AI·西'];
+        const colors = ['#e6a23c', '#409eff', '#67c23a', '#f56c6c'];
         // 累计总分（按牌桌座位展示）
         const totals = [0, 0, 0, 0];
         this.history.forEach(r => r.scores.forEach((s, i) => { totals[i] += s; }));
@@ -2918,6 +3200,13 @@ class MahjongGame {
                     <h2>📈 积分榜</h2>
                     <div class="lb-section-title">累计总分（按方位）</div>
                     <div class="result-panel">${boardRows}</div>
+                    <div class="lb-section-title lb-collapsible" onclick="game.toggleLeaderboardSection('lb-chart-body')">积分走势（累计）<span class="lb-arrow" id="lb-chart-arrow">▸</span></div>
+                    <div class="lb-chart-wrap" id="lb-chart-body" style="display:none;">
+                        ${this.history.length
+                            ? `<canvas id="score-chart"></canvas>
+                               <div class="lb-legend">${names.map((n, i) => `<span class="lg-item"><i style="background:${colors[i]}"></i>${n}</span>`).join('')}</div>`
+                            : '<div class="table-empty">暂无对局数据</div>'}
+                    </div>
                     <div class="lb-section-title">历史对局（点击展开明细）</div>
                     <div class="result-panel hist-list">${histRows}</div>
                     <div class="lb-actions">
@@ -2928,11 +3217,132 @@ class MahjongGame {
             </div>
         `;
         document.getElementById('modal-container').innerHTML = html;
+        this.drawScoreChart();
+    }
+
+    // 积分走势折线图：四位玩家累计积分随局数变化（原生 canvas，无依赖）
+    drawScoreChart() {
+        const canvas = document.getElementById('score-chart');
+        if (!canvas) return; // 无对局数据时 canvas 不注入，直接返回
+        const wrap = canvas.parentElement;
+        if (wrap && wrap.style.display === 'none') return; // 折叠时跳过绘制，展开时再画（避免隐藏态 clientWidth=0 出空白）
+        const ctx = canvas.getContext('2d');
+        const colors = ['#e6a23c', '#409eff', '#67c23a', '#f56c6c'];
+        const hist = this.history;
+        const N = hist.length;
+        if (!N) return;
+
+        // 累计积分序列：cum[k] 为第 k 局结束后的累计分（k=0 为开局基准全 0）
+        const cum = [[0, 0, 0, 0]];
+        for (let k = 0; k < N; k++) {
+            const prev = cum[k];
+            const s = hist[k].scores || [0, 0, 0, 0];
+            cum.push([0, 1, 2, 3].map(i => prev[i] + (s[i] || 0)));
+        }
+
+        let yMin = 0, yMax = 0;
+        for (let k = 0; k <= N; k++)
+            for (let i = 0; i < 4; i++) {
+                yMin = Math.min(yMin, cum[k][i]);
+                yMax = Math.max(yMax, cum[k][i]);
+            }
+        const pad = (yMax - yMin) * 0.1 || 10;
+        yMin -= pad; yMax += pad;
+
+        // 画布尺寸（dpr 适配，避免高清屏模糊）
+        const cssW = wrap.clientWidth || 680;
+        const cssH = 220;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.style.width = cssW + 'px';
+        canvas.style.height = cssH + 'px';
+        canvas.width = Math.round(cssW * dpr);
+        canvas.height = Math.round(cssH * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, cssW, cssH);
+
+        const padL = 44, padR = 14, padT = 12, padB = 26;
+        const plotW = cssW - padL - padR;
+        const plotH = cssH - padT - padB;
+        // X 轴域向上取到最近的 10 的整数倍（如 27→30、45→50），让末局数据不贴边
+        const Nx = Math.ceil(N / 10) * 10;
+        const xAt = (k) => padL + plotW * k / Nx;
+        const yAt = (v) => padT + plotH * (yMax - v) / (yMax - yMin);
+
+        // 绘图区白底
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(padL, padT, plotW, plotH);
+
+        // 横向网格 + Y 轴刻度
+        ctx.lineWidth = 1;
+        ctx.font = '11px system-ui, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        const ticks = 5;
+        for (let t = 0; t <= ticks; t++) {
+            const val = yMin + (yMax - yMin) * t / ticks;
+            const y = yAt(val);
+            ctx.strokeStyle = '#ececec';
+            ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+            ctx.fillStyle = '#999';
+            ctx.fillText(String(Math.round(val)), padL - 6, y);
+        }
+        // 0 基准线加粗
+        if (yMin < 0 && yMax > 0) {
+            const y0 = yAt(0);
+            ctx.strokeStyle = '#bbb';
+            ctx.lineWidth = 1.2;
+            ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(padL + plotW, y0); ctx.stroke();
+        }
+
+        // X 轴局号标签：按整 10 均匀分布（0 记为“开局”），末位为向上取整的 10 的倍数 Nx
+        ctx.fillStyle = '#999';
+        ctx.textBaseline = 'top';
+        for (let k = 0; k <= Nx; k += 10) {
+            if (k === 0) {
+                ctx.textAlign = 'left';
+                ctx.fillText('开局', padL, padT + plotH + 6);
+            } else if (k === Nx) {
+                ctx.textAlign = 'right';
+                ctx.fillText('第' + k + '局', padL + plotW, padT + plotH + 6);
+            } else {
+                ctx.textAlign = 'center';
+                ctx.fillText('第' + k + '局', xAt(k), padT + plotH + 6);
+            }
+        }
+
+        // 四条折线 + 数据点
+        for (let i = 0; i < 4; i++) {
+            ctx.strokeStyle = colors[i];
+            ctx.lineWidth = 2;
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+            for (let k = 0; k <= N; k++) {
+                const x = xAt(k), y = yAt(cum[k][i]);
+                if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            ctx.fillStyle = colors[i];
+            for (let k = 0; k <= N; k++) {
+                const x = xAt(k), y = yAt(cum[k][i]);
+                ctx.beginPath(); ctx.arc(x, y, 2.6, 0, Math.PI * 2); ctx.fill();
+            }
+        }
     }
 
     toggleHistoryDetail(id) {
         const el = document.getElementById(id);
         if (el) el.style.display = el.style.display === 'block' ? 'none' : 'block';
+    }
+
+    // 积分榜分区折叠（走势图默认收起，展开时再绘制折线图）
+    toggleLeaderboardSection(id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const hidden = el.style.display === 'none' || el.style.display === '';
+        el.style.display = hidden ? 'block' : 'none';
+        const arrow = document.getElementById('lb-chart-arrow');
+        if (arrow) arrow.textContent = hidden ? '▾' : '▸';
+        if (hidden && id === 'lb-chart-body') this.drawScoreChart();
     }
 
     clearHistory() {
@@ -2987,14 +3397,25 @@ class MahjongGame {
                     if (this.currentPlayer === 0 && this.phase === 'play' && this.drawnTile && tile === this.drawnTile) {
                         el.classList.add('drawn-tile');
                     }
+                    // 结算后全体手牌展示：把胡的那张牌标记出来
+                    if (this.phase === 'end' && player.isHu && player.huInfo && player.huInfo.tile
+                        && tile.suit === player.huInfo.tile.suit && tile.value === player.huInfo.tile.value) {
+                        el.classList.add('hu-win-tile');
+                    }
                     container.appendChild(el);
                 });
             } else {
                 // AI：牌局结束时亮出正面，否则显示背面
                 if (this.phase === 'end') {
+                    let huMarked = false;
                     player.hand.forEach((tile) => {
                         const el = this.createTileElement(tile, -1);
                         el.style.cursor = 'default';
+                        if (player.isHu && player.huInfo && player.huInfo.tile && !huMarked
+                            && tile.suit === player.huInfo.tile.suit && tile.value === player.huInfo.tile.value) {
+                            el.classList.add('hu-win-tile');
+                            huMarked = true;
+                        }
                         container.appendChild(el);
                     });
                 } else {
@@ -3002,6 +3423,12 @@ class MahjongGame {
                         const back = document.createElement('div');
                         back.className = 'tile-back';
                         container.appendChild(back);
+                    }
+                    // AI 胡牌后：在背面手牌之外高亮展示最后一张胡的牌（自摸/点炮/抢杠均适用）
+                    if (player.isHu && player.huInfo && player.huInfo.tile) {
+                        const huEl = this.createTileElement(player.huInfo.tile, -1);
+                        huEl.classList.add('hu-win-tile');
+                        container.appendChild(huEl);
                     }
                 }
             }
