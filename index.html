@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>四川麻将 - 血战到底 v20260728.1950</title>
+<title>四川麻将 - 血战到底 v20260729.1700</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -578,27 +578,26 @@ body {
     color: #555;
     margin: 12px 0 4px;
 }
-/* 牌桌座位图（累计总分） */
+/* 牌桌座位图（累计总分）：2 行紧凑网格 */
 .table-seats {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-    padding: 10px 14px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 5px;
+    padding: 8px 6px;
     margin: 6px 0 4px;
     border-radius: 14px;
     background: linear-gradient(160deg, rgba(26,92,42,0.10), rgba(26,92,42,0.05));
     border: 1px solid rgba(26,92,42,0.18);
 }
-.seat-row { display: flex; align-items: center; }
-.seat-row.center { justify-content: center; }
-.seat-row.between { justify-content: space-between; }
 .seat {
-    min-width: 104px;
-    padding: 5px 16px;
+    min-width: 0;
+    width: 100%;
+    padding: 5px 8px;
     display: flex;
+    flex-direction: row;
     align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
+    justify-content: center;
+    gap: 6px;
     text-align: center;
     border-radius: 10px;
     background: rgba(255,255,255,0.92);
@@ -612,12 +611,12 @@ body {
     background: rgba(255,215,0,0.10);
 }
 .seat-name {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     color: #333;
 }
 .seat-score {
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 700;
 }
 /* 积分榜分区标题：可折叠（走势图默认收起） */
@@ -653,6 +652,12 @@ body {
     font-size: 14px;
     transition: background 0.15s;
 }
+.hist-round {
+    font-weight: 700;
+    color: #1a5c2a;
+    margin-right: 4px;
+    white-space: nowrap;
+}
 .hist-head:hover { background: rgba(0,0,0,0.04); }
 .hist-detail {
     padding: 0 8px 8px;
@@ -681,16 +686,34 @@ body {
 .lg-item i {
     width: 14px; height: 4px; border-radius: 2px; display: inline-block;
 }
-/* 历史明细行：分数与状态同一行展示，整行可换行不截断 */
-.hist-detail-row {
-    padding: 8px 15px;
-    border-bottom: 1px solid #eee;
-    font-size: 14px;
-    text-align: left;
-    line-height: 1.7;
-    word-break: break-word;
+/* 历史明细：类表格，4 列对齐（名字｜分数｜胡状态｜杠状态） */
+.hist-table {
+    display: grid;
+    grid-template-columns: 64px 56px 1fr 1fr;
+    font-size: 13px;
+    border: 1px solid #e5e5e5;
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 4px 0;
 }
-.hist-name { font-weight: 600; color: #333; }
+.hist-table .hd {
+    padding: 5px 6px;
+    border-bottom: 1px solid #eee;
+    border-right: 1px solid #eee;
+    line-height: 1.4;
+    word-break: break-word;
+    text-align: left;
+}
+.hist-table .hd:nth-child(4n) { border-right: none; }
+.hist-table .hd:nth-last-child(-n+4) { border-bottom: none; }
+.hist-table .hd:nth-child(4n+1),
+.hist-table .hd:nth-child(4n+2) { text-align: center; }
+.hist-table .hd-head {
+    background: rgba(26,92,42,0.10);
+    font-weight: 700;
+    color: #1a5c2a;
+    text-align: center;
+}
 
 
 /* 右上角按钮容器：统一 flex 等间距 */
@@ -1357,8 +1380,10 @@ const AI_LEVELS = {
 const ROUTE_CONFIG = {
     qingyiseMinSuit: 10,        // 规则1：自家目标门 ≥10 张，无视三家缺牌即走清一色
     qingyiseMinSuitWithQue: 8,  // 规则2：自家目标门 ≥8 张且三家都缺该门即走清一色
+    qingyiseContestExtra: 2,    // 目标门被对手争抢时，需额外多出的张数才坚持清一色
     pengpengMinPairs: 3,   // 手牌对子(含刻子)达到该数量 → 走碰碰胡
     routeMinShanten: 2,    // 向听数 ≥ 该值才转路线（激进：≥2 即转）
+    crunchWall: 20,        // 牌墙剩余张数阈值：≤ 此值时放弃大牌路线，转进张/快听的简听思路（约流局前 5 轮窗口，可调）
 };
 
 // ==================== AI策略 ====================
@@ -1453,29 +1478,74 @@ class AIPlayer {
         return bestSuit;
     }
 
+    // 某花色在墙内（已排除所有手牌/弃牌/副露）还可摸到的总张数
+    static suitWallLeft(suit, player, game) {
+        const vis = this.remainingCounts(player, null, game);
+        let left = 0;
+        for (let v = 1; v <= 9; v++) {
+            left += Math.max(0, 4 - (vis[suit + '_' + v] || 0));
+        }
+        return left;
+    }
+
+    // 推断对手正在收集的花色集合（Set）。仅在 game 存在时有效。
+    // 强信号：副露中仅一门非缺花色出现 → 该门即其收集门。
+    // 弱信号：两门非缺花色按弃牌计数比较，弃得少的更可能在收（平局保守不判定）。
+    static opponentCollectingSuits(game, meIndex) {
+        const set = new Set();
+        game.players.forEach((p, i) => {
+            if (i === meIndex || !p.queSuit) return;
+            const nonQue = SUITS.filter(s => s !== p.queSuit);
+            if (nonQue.length < 2) { if (nonQue[0]) set.add(nonQue[0]); return; }
+            const meldSuits = new Set();
+            for (const m of p.melds) for (const t of m.tiles) meldSuits.add(t.suit);
+            const meldNonQue = [...meldSuits].filter(s => s !== p.queSuit);
+            if (meldNonQue.length === 1) { set.add(meldNonQue[0]); return; }
+            // 弃牌弱信号：两门非缺花色中弃得少的更可能在收
+            const dCount = { wan: 0, tiao: 0, tong: 0 };
+            for (const d of p.discards) if (nonQue.includes(d.suit)) dCount[d.suit]++;
+            const [a, b] = nonQue;
+            if (dCount[a] < dCount[b]) set.add(a);
+            else if (dCount[b] < dCount[a]) set.add(b);
+            // 平局：不确定，保守不加入
+        });
+        return set;
+    }
+
     // 大师档「大牌进攻路线」检测（纯函数，每次决策独立调用，AIPlayer 无实例状态）
-    // 返回 null | { type:'qingyise', target } | { type:'pengpeng' }
+    // 返回 null | { type:'qingyise', target, contested } | { type:'pengpeng' }
     static detectRoute(player, game, opts) {
         if (!(opts && opts.route) || !game) return null;
+        // 牌墙见底：放弃大牌路线，转简听思路（进张主导）以避免流局输分
+        if (game.wall && game.wall.length <= ROUTE_CONFIG.crunchWall) return null;
         const me = game.players.indexOf(player);
         const others = game.players.filter((p, i) => i !== me);
-        // 清一色路线：以「自己非缺门中张数最多的门」为目标门
+        // 清一色路线：结合「墙内余量」与「对手收门争抢」择优
+        const oppCollect = this.opponentCollectingSuits(game, me);
         const nonQueSuits = SUITS.filter(s => s !== player.queSuit);
-        let bestSuit = null, bestCount = 0;
+        let best = null; // { suit, contested, score }
         for (const s of nonQueSuits) {
             const c = player.hand.filter(t => t.suit === s).length;
-            if (c > bestCount) { bestCount = c; bestSuit = s; }
+            let meldTiles = 0;
+            for (const m of player.melds) for (const t of m.tiles) if (t.suit === s) meldTiles++;
+            const wallLeft = this.suitWallLeft(s, player, game);
+            const need = 14 - c - meldTiles;          // 做清一色尚需的该门张数
+            const wallOk = wallLeft >= need;          // 墙被抽干则不锁
+            if (!wallOk) continue;
+            const contested = oppCollect.has(s);
+            const extra = contested ? ROUTE_CONFIG.qingyiseContestExtra : 0;
+            // 资格：规则1（自家张数达标）或 规则2（三家都缺该门且张数达标）
+            const r1 = c >= ROUTE_CONFIG.qingyiseMinSuit + extra;
+            const allLack = others.every(p => p.queSuit === s);
+            const r2 = c >= ROUTE_CONFIG.qingyiseMinSuitWithQue + extra && allLack;
+            if (r1 || r2) {
+                // 择优：张数多 > 未被争抢 > 墙内余量多
+                const score = c * 100 + (contested ? 0 : 50) + Math.min(wallLeft, 30);
+                if (!best || score > best.score) best = { suit: s, contested, score };
+            }
         }
-        if (bestSuit) {
-            // 规则1：自家该门 ≥10 张，无视三家缺牌，积极做清一色
-            if (bestCount >= ROUTE_CONFIG.qingyiseMinSuit) {
-                return { type: 'qingyise', target: bestSuit };
-            }
-            // 规则2：自家该门 ≥8 张，且另外三家都缺这一门
-            const allLack = others.every(p => p.queSuit === bestSuit);
-            if (bestCount >= ROUTE_CONFIG.qingyiseMinSuitWithQue && allLack) {
-                return { type: 'qingyise', target: bestSuit };
-            }
+        if (best) {
+            return { type: 'qingyise', target: best.suit, contested: best.contested };
         }
         // 碰碰胡路线（清一色不成立时的备选）：非缺门的对子(含刻子)足够多且向听够高
         const cnt = {};
@@ -2041,6 +2111,8 @@ class MahjongGame {
         this.pending = null;
         this.enableDiscard = false;
         this.render();
+        // 刷新/重开后，将已从 localStorage 恢复的累计总分写回左上角显示
+        document.getElementById('total-score').textContent = this.totalScore;
     }
 
     restart() {
@@ -2642,7 +2714,7 @@ class MahjongGame {
         player.huInfo.isQiangGang = isQiangGang;
 
         const huType = isZiMo ? '自摸' : (isQiangGang ? '抢杠胡' : '点炮');
-        this.showToast(`🎉 ${player.isHuman ? '你' : 'AI·' + ['','东','北','西'][player.id]} ${huType}！${fanInfo.fanList.join('+')} = ${fanInfo.fan}番`);
+        this.showToast(`🎉 ${player.isHuman ? '你' : 'AI·' + ['','东','北','西'][player.id]} ${huType}！${fanInfo.fan}番 = ${fanInfo.fanList.join('+')}`);
 
         // 结算
         this.settleHu(player, fanInfo, isZiMo);
@@ -2974,7 +3046,7 @@ class MahjongGame {
                 const fromName = hi.isZiMo ? '' : (this.players[hi.fromId] ? (this.players[hi.fromId].isHuman ? '你' : 'AI·' + ['','东','北','西'][hi.fromId]) : '');
                 const huWay = hi.isZiMo ? '自摸' : (hi.isQiangGang ? '抢杠胡' : ('点炮 · 来源: ' + fromName));
                 const tileName = hi.tile ? hi.tile.toString() : '';
-                detail += `<div class="result-detail">${huWay} ｜ 胡牌: ${tileName} ｜ ${hi.fanList.join('+')} = ${hi.fan}番</div>`;
+                detail += `<div class="result-detail">${huWay} ｜ 胡牌: ${tileName} ｜ ${hi.fan}番 = ${hi.fanList.join('+')}</div>`;
             }
             if (p.gangScore > 0) {
                 const g = p.gangCounts;
@@ -2995,6 +3067,7 @@ class MahjongGame {
                 return {
                     score: p.score,
                     status,
+                    tingFan: p.tingFan || 0,
                     hu: p.huInfo ? {
                         isZiMo: p.huInfo.isZiMo,
                         isQiangGang: p.huInfo.isQiangGang,
@@ -3120,9 +3193,9 @@ class MahjongGame {
         const totals = [0, 0, 0, 0];
         this.history.forEach(r => r.scores.forEach((s, i) => { totals[i] += s; }));
 
-        const seatBox = (label, total, isMe) => {
+        const seatBox = (label, total, isMe, col) => {
             const cls = total >= 0 ? 'positive' : 'negative';
-            return `<div class="seat${isMe ? ' me' : ''}">
+            return `<div class="seat${isMe ? ' me' : ''}" style="grid-column:${col};">
                 <div class="seat-name">${label}</div>
                 <div class="seat-score score ${cls}">${total >= 0 ? '+' : ''}${total}</div>
             </div>`;
@@ -3133,9 +3206,10 @@ class MahjongGame {
         } else {
             boardRows = `
                 <div class="table-seats">
-                    <div class="seat-row center">${seatBox('北', totals[2], false)}</div>
-                    <div class="seat-row between">${seatBox('西', totals[3], false)}${seatBox('东', totals[1], false)}</div>
-                    <div class="seat-row center">${seatBox('你', totals[0], true)}</div>
+                    ${seatBox('西家', totals[3], false, 1)}
+                    ${seatBox('北家', totals[2], false, 2)}
+                    ${seatBox('东家', totals[1], false, 3)}
+                    ${seatBox('你', totals[0], true, 2)}
                 </div>`;
         }
 
@@ -3152,40 +3226,48 @@ class MahjongGame {
                 const detailId = `hist-detail-${i}`;
                 let detail = '';
                 const hasDetails = rec.details && rec.details.length === 4;
+                const statusText = { hu: '✅ 胡牌', zhu: '🐷 花猪', ting: '👂 听牌', none: '❌ 未听' };
+                const head = `<div class="hd hd-head">名字</div><div class="hd hd-head">分数</div><div class="hd hd-head">胡状态</div><div class="hd hd-head">杠状态</div>`;
+                const buildRow = (name, score, huHtml, gangHtml) => {
+                    const dcls = score >= 0 ? 'positive' : 'negative';
+                    return `<div class="hd">${name}</div>` +
+                        `<div class="hd score ${dcls}">${score >= 0 ? '+' : ''}${score}</div>` +
+                        `<div class="hd">${huHtml}</div>` +
+                        `<div class="hd">${gangHtml}</div>`;
+                };
                 if (hasDetails) {
-                    const statusText = { hu: '✅ 胡牌', zhu: '🐷 花猪', ting: '👂 听牌', none: '❌ 未听' };
+                    let body = '';
                     rec.details.forEach((d, j) => {
-                        const dcls = d.score >= 0 ? 'positive' : 'negative';
-                        let extra = '';
+                        let huHtml = '';
                         if (d.hu) {
                             const hi = d.hu;
                             const fromName = hi.isZiMo ? '' : (this.players[hi.fromId] ? (this.players[hi.fromId].isHuman ? '你' : 'AI·' + ['', '东', '北', '西'][hi.fromId]) : '');
                             const huWay = hi.isZiMo ? '自摸' : (hi.isQiangGang ? '抢杠胡' : ('点炮·' + fromName));
-                            extra += `${huWay} ${hi.fanList.join('+')}=${hi.fan}番`;
+                            huHtml = `${huWay} ${hi.fan}番 = ${hi.fanList.join('+')}`;
+                        } else {
+                            let st = statusText[d.status] || '';
+                            if (d.status === 'ting' && d.tingFan) st += ` · ${d.tingFan}番`;
+                            huHtml = st;
                         }
+                        let gangHtml = '';
                         if (d.gang && d.gang.score > 0) {
                             const g = d.gang;
-                            extra += (extra ? ' | ' : '') + `杠 明×${g.ming} 暗×${g.an} 补×${g.bu} (+${g.score})`;
+                            gangHtml = `明×${g.ming} 暗×${g.an} 补×${g.bu} (+${g.score})`;
                         }
-                        const extraHtml = extra ? ` | ${extra}` : '';
-                        detail += `<div class="hist-detail-row">
-                            <span class="hist-name">${names[j]} ·</span>
-                            <span class="score ${dcls}">${d.score >= 0 ? '+' : ''}${d.score}</span>
-                            ${statusText[d.status]}${extraHtml}
-                        </div>`;
+                        body += buildRow(names[j], d.score, huHtml, gangHtml);
                     });
+                    detail = `<div class="hist-table">${head}${body}</div>`;
                 } else {
+                    let body = '';
                     rec.scores.forEach((s, j) => {
-                        const dcls = s >= 0 ? 'positive' : 'negative';
-                        detail += `<div class="hist-detail-row">
-                            <span class="hist-name">${names[j]} ·</span>
-                            <span class="score ${dcls}">${s >= 0 ? '+' : ''}${s}</span>
-                        </div>`;
+                        body += buildRow(names[j], s, '', '');
                     });
+                    detail = `<div class="hist-table">${head}${body}</div>`;
                 }
                 histRows += `
                     <div class="hist-item">
                         <div class="hist-head" onclick="game.toggleHistoryDetail('${detailId}')">
+                            <span class="hist-round">第${i + 1}局</span>
                             <span>📅 ${dt}</span>
                             <span class="score ${myCls}">你 ${myScore >= 0 ? '+' : ''}${myScore} ▾</span>
                         </div>
@@ -3303,10 +3385,10 @@ class MahjongGame {
                 ctx.fillText('开局', padL, padT + plotH + 6);
             } else if (k === Nx) {
                 ctx.textAlign = 'right';
-                ctx.fillText('第' + k + '局', padL + plotW, padT + plotH + 6);
+                ctx.fillText(String(k), padL + plotW, padT + plotH + 6);
             } else {
                 ctx.textAlign = 'center';
-                ctx.fillText('第' + k + '局', xAt(k), padT + plotH + 6);
+                ctx.fillText(String(k), xAt(k), padT + plotH + 6);
             }
         }
 
